@@ -1,4 +1,4 @@
-"""LLM-based translation module — context-aware, duration-conscious."""
+"""LLM-based translation — context-aware and duration-conscious."""
 
 import os
 from openai import OpenAI
@@ -19,12 +19,12 @@ def translate_segments(
     source_language: str | None = None,
 ) -> list[dict]:
     """
-    Translate a list of ASR segments to target_language.
+    Translate ASR segments to target_language.
 
-    Each input segment: {"text": str, "start": float, "end": float}
-    Returns the same list with "translated_text" added to each segment.
+    Input segments: {"text": str, "start": float, "end": float}
+    Returns same list with "translated_text" added to each item.
 
-    Sends all segments in a single LLM call for context awareness.
+    All segments are sent in a single LLM call for cohesive context.
     """
     if not segments:
         return segments
@@ -35,22 +35,22 @@ def translate_segments(
     src_hint = f"from {source_language} " if source_language and source_language != "auto" else ""
 
     numbered = "\n".join(
-        f"[{i+1}] ({seg['end'] - seg['start']:.2f}s) {seg['text']}"
+        f"[{i + 1}] ({seg['end'] - seg['start']:.2f}s) {seg['text']}"
         for i, seg in enumerate(segments)
     )
 
     system_prompt = (
-        f"You are a professional subtitler/dubbing translator. "
-        f"Translate the following speech segments {src_hint}to {target_language}. "
+        f"You are a professional dubbing translator. "
+        f"Translate the speech segments {src_hint}to {target_language}.\n"
         "Rules:\n"
-        "1. Keep translations natural and conversational, not literal.\n"
-        "2. Each segment shows its duration in seconds. Keep translated text "
-        "   concise enough to be spoken within that duration at a natural pace.\n"
-        "   A rough guide: English ~2.5 words/second, adjust for target language.\n"
-        "3. Preserve tone, register, and speaker personality.\n"
-        "4. Return ONLY the translated lines, one per line, prefixed with the same "
-        "   [N] index. No extra commentary.\n"
-        "Example output format:\n"
+        "1. Keep translations natural and conversational — not literal.\n"
+        "2. Each segment shows its duration in seconds. Keep the translation "
+        "   concise enough to be spoken within that duration at a natural pace "
+        "   (~2–3 words/second depending on language).\n"
+        "3. Preserve the speaker's tone, register, and personality.\n"
+        "4. Return ONLY the translated lines, one per line, prefixed with the "
+        "   same [N] index. No extra commentary.\n"
+        "Example:\n"
         "[1] Translated text here\n"
         "[2] Another translated line\n"
     )
@@ -67,30 +67,19 @@ def translate_segments(
     raw = response.choices[0].message.content or ""
     translations = _parse_numbered(raw, len(segments))
 
-    result = []
-    for seg, translated in zip(segments, translations):
-        result.append({**seg, "translated_text": translated})
-    return result
+    return [{**seg, "translated_text": t} for seg, t in zip(segments, translations)]
 
 
 def _parse_numbered(text: str, count: int) -> list[str]:
-    """Extract [N] prefixed lines into an ordered list."""
     lines: dict[int, str] = {}
     for line in text.strip().splitlines():
         line = line.strip()
-        if not line:
-            continue
         if line.startswith("[") and "]" in line:
             bracket_end = line.index("]")
             try:
                 idx = int(line[1:bracket_end])
-                content = line[bracket_end + 1:].strip()
-                lines[idx] = content
+                lines[idx] = line[bracket_end + 1:].strip()
             except ValueError:
                 pass
 
-    # Fall back to positional order if parsing is incomplete
-    result = []
-    for i in range(1, count + 1):
-        result.append(lines.get(i, ""))
-    return result
+    return [lines.get(i, "") for i in range(1, count + 1)]

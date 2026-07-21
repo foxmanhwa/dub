@@ -19,14 +19,6 @@ def write_transcript_json(segments: list[dict], path: str) -> str:
     return path
 
 
-def _srt_timestamp(seconds: float) -> str:
-    h = int(seconds // 3600)
-    m = int((seconds % 3600) // 60)
-    s = int(seconds % 60)
-    ms = int((seconds % 1) * 1000)
-    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
-
-
 def write_srt(segments: list[dict], path: str) -> str:
     lines = []
     idx = 1
@@ -34,9 +26,19 @@ def write_srt(segments: list[dict], path: str) -> str:
         text = seg.get("translated_text", "").strip()
         if not text:
             continue
-        start_ts = _srt_timestamp(seg["start"])
-        end_ts = _srt_timestamp(seg["end"])
-        lines.append(f"{idx}\n{start_ts} --> {end_ts}\n{text}\n")
+        lines.append(
+            f"{idx}\n"
+            f"{_ts(seg['start'])} --> {_ts(seg['end'])}\n"
+            f"{text}\n"
+        )
         idx += 1
     Path(path).write_text("\n".join(lines), encoding="utf-8")
     return path
+
+
+def _ts(seconds: float) -> str:
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    ms = int((seconds % 1) * 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"

@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git fetch *)",
+      "Bash(git checkout *)",
+      "Bash(python -c 'import ast, pathlib *)",
+      "Bash(python -c ' *)",
+      "Bash(pip install *)",
+      "Bash(python -m venv .venv)"
+    ]
+  }
+}

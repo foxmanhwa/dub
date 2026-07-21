@@ -144,7 +144,7 @@ def build_ui() -> gr.Blocks:
         else ""
     )
 
-    with gr.Blocks(title="Video Redubbing — Fish Audio", theme=gr.themes.Soft()) as demo:
+    with gr.Blocks(title="Video Redubbing — Fish Audio") as demo:
         gr.Markdown("# Video Redubbing & Localization")
         gr.Markdown(
             "Upload a single-speaker video. The app transcribes, translates, "
@@ -210,4 +210,5 @@ if __name__ == "__main__":
         server_name="0.0.0.0",
         server_port=int(os.environ.get("PORT", 7860)),
         share=False,
+        theme=gr.themes.Soft(),
     )

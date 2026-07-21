@@ -1,4 +1,4 @@
-"""Fish Audio ASR module — transcribes audio with word/segment timestamps."""
+"""Fish Audio ASR — transcribes audio with segment timestamps."""
 
 import os
 import httpx
@@ -12,7 +12,7 @@ def transcribe(audio_path: str | Path, language: str | None = None) -> dict:
     """
     Transcribe audio using Fish Audio ASR.
 
-    Returns a dict matching Fish Audio's response:
+    Returns the Fish Audio response dict:
       {
         "text": "...",
         "duration": 12.3,
@@ -22,7 +22,7 @@ def transcribe(audio_path: str | Path, language: str | None = None) -> dict:
         ]
       }
 
-    language: BCP-47 code like "en", "zh", "es", or None for auto-detect.
+    language: BCP-47 code ("en", "zh", "es" …) or None for auto-detect.
     """
     api_key = os.environ["FISH_AUDIO_API_KEY"]
     audio_path = Path(audio_path)
@@ -40,18 +40,18 @@ def transcribe(audio_path: str | Path, language: str | None = None) -> dict:
         headers={"Authorization": f"Bearer {api_key}"},
         files=files,
         data=data,
-        timeout=120,
+        timeout=180,
     )
     resp.raise_for_status()
     return resp.json()
 
 
 def _mime(path: Path) -> str:
-    ext = path.suffix.lower()
     return {
         ".wav": "audio/wav",
         ".mp3": "audio/mpeg",
         ".flac": "audio/flac",
         ".ogg": "audio/ogg",
         ".m4a": "audio/mp4",
-    }.get(ext, "audio/mpeg")
+        ".aac": "audio/aac",
+    }.get(path.suffix.lower(), "audio/mpeg")
