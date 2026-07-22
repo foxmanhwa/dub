@@ -63,7 +63,9 @@ def mux_audio_into_video(video_path: str, audio_path: str, output_path: str) -> 
         "ffmpeg", "-y",
         "-i", video_path, "-i", audio_path,
         "-c:v", "copy",
+        "-c:a", "aac", "-ac", "1",          # explicit codec + mono
         "-map", "0:v:0", "-map", "1:a:0",
+        "-movflags", "+faststart",            # moov atom at front for browser play
         "-shortest",
         output_path,
     ])
@@ -94,10 +96,16 @@ def time_fit_clip(
     Stretch or compress a TTS clip to exactly target_duration seconds.
 
     Strategy:
+    - Zero/negative target_duration: transcode TTS as-is (can't compress to nothing).
     - Ratio in [0.25, 4.0]: atempo filter (chained if needed).
     - Zero-length source: synthesize silence.
     - After atempo: trim/pad to exact target_duration.
     """
+    if target_duration <= 0:
+        # Zero-duration ASR segment — keep the TTS clip at its natural length.
+        _run(["ffmpeg", "-y", "-i", tts_path, "-ar", str(sample_rate), "-ac", "1", output_path])
+        return output_path
+
     tts_dur = get_duration(tts_path)
 
     if tts_dur <= 0:
@@ -113,7 +121,7 @@ def time_fit_clip(
 
     _run([
         "ffmpeg", "-y", "-i", tts_path,
-        "-filter:a", atempo, "-ar", str(sample_rate),
+        "-filter:a", atempo, "-ar", str(sample_rate), "-ac", "1",
         output_path,
     ])
 
@@ -170,6 +178,9 @@ def assemble_audio_track(
         if not tts_path or not os.path.exists(tts_path):
             continue
         target_dur = seg["end"] - seg["start"]
+        if target_dur <= 0:
+            # Zero-duration ASR segment: no time slot to place audio into — skip.
+            continue
         fitted_path = str(fitted_dir / f"fitted_{i:04d}.wav")
         time_fit_clip(tts_path, target_dur, fitted_path, sample_rate)
         tts_lookup[i] = fitted_path
@@ -189,6 +200,10 @@ def assemble_audio_track(
 
     for i, seg in enumerate(segments):
         ev_start, ev_end = seg["start"], seg["end"]
+
+        if ev_end - ev_start <= 0:
+            # Zero-duration segment: no time slot, nothing to place.
+            continue
 
         if ev_start > cursor + 0.01:
             gap_path = str(work / f"piece_{piece_idx:04d}_gap.wav")
@@ -220,7 +235,7 @@ def assemble_audio_track(
         "ffmpeg", "-y",
         "-f", "concat", "-safe", "0",
         "-i", concat_list,
-        "-ar", str(sample_rate),
+        "-ar", str(sample_rate), "-ac", "1",  # lock to explicit mono
         output_path,
     ])
     return output_path

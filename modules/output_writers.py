@@ -36,6 +36,46 @@ def write_srt(segments: list[dict], path: str) -> str:
     return path
 
 
+def write_timing_csv(rows: list[dict], path: str) -> str:
+    import csv
+    fieldnames = ["seg", "start", "end", "orig_dur", "tts_dur", "ratio", "status",
+                  "original_text", "translated_text"]
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        for r in rows:
+            row = dict(r)
+            for k in ("orig_dur", "tts_dur", "ratio"):
+                if row[k] is not None:
+                    row[k] = f"{row[k]:.3f}"
+                else:
+                    row[k] = ""
+            writer.writerow(row)
+    return path
+
+
+def write_backtrans_csv(segments: list[dict], path: str) -> str:
+    import csv
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["seg", "start", "end", "original_text", "translated_text",
+                         "back_translated_text", "similarity", "flag"])
+        for i, seg in enumerate(segments):
+            sim = seg.get("back_trans_similarity")
+            flag = "warning" if (sim is not None and sim < 0.5) else ""
+            writer.writerow([
+                i,
+                f"{seg['start']:.3f}",
+                f"{seg['end']:.3f}",
+                seg.get("text", ""),
+                seg.get("translated_text", ""),
+                seg.get("back_translated_text", ""),
+                f"{sim:.3f}" if sim is not None else "",
+                flag,
+            ])
+    return path
+
+
 def _ts(seconds: float) -> str:
     h = int(seconds // 3600)
     m = int((seconds % 3600) // 60)

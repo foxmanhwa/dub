@@ -2,13 +2,13 @@
 
 A Gradio web app that redubs single-speaker videos into a target language using:
 - **Fish Audio** — ASR transcription (with timestamps) + TTS with instant voice cloning
-- **OpenAI** — context-aware, duration-conscious translation
+- **Ollama** — local, offline, context-aware translation (no API key needed)
 
 ## Pipeline
 
 ```
 Video → FFmpeg extract audio → Fish Audio ASR (with timestamps)
-      → LLM translation (duration-conscious) → Fish Audio TTS (voice-cloned)
+      → Ollama LLM translation (duration-conscious) → Fish Audio TTS (voice-cloned)
       → FFmpeg time-fit each clip → reassemble full audio → mux back to MP4
 ```
 
@@ -23,12 +23,25 @@ Output files per run:
 
 - Python 3.11+
 - [FFmpeg](https://ffmpeg.org/download.html) installed and on your `PATH`
-  ```bash
-  # macOS
-  brew install ffmpeg
-  # Ubuntu/Debian
-  sudo apt install ffmpeg
-  ```
+- [Ollama](https://ollama.com) installed and running
+
+**Install FFmpeg:**
+```bash
+# macOS
+brew install ffmpeg
+# Ubuntu/Debian
+sudo apt install ffmpeg
+# Windows: download from https://ffmpeg.org/download.html and add to PATH
+```
+
+**Install Ollama and pull the translation model:**
+```bash
+# Install from https://ollama.com, then:
+ollama pull llama3.2
+```
+
+The app defaults to `llama3.2:latest`. Any model already in `ollama list` works —
+set `OLLAMA_MODEL` in `.env` to override.
 
 ### 2. Clone & install
 
@@ -40,25 +53,26 @@ source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 3. API keys
+### 3. API key
 
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env`:
+Edit `.env` — only one key needed:
 
 ```env
 FISH_AUDIO_API_KEY=your_fish_audio_api_key_here
-OPENAI_API_KEY=your_openai_api_key_here
 ```
 
-- **Fish Audio API key**: sign up at [fish.audio](https://fish.audio) → Dashboard → API Keys
-- **OpenAI API key**: [platform.openai.com](https://platform.openai.com) → API Keys
+**Fish Audio API key**: sign up at [fish.audio](https://fish.audio) → Dashboard → API Keys
 
-### 4. Run
+Translation runs entirely locally via Ollama — no OpenAI account or billing required.
+
+### 4. Start Ollama, then run
 
 ```bash
+ollama serve   # if not already running as a background service
 python app.py
 ```
 
@@ -80,12 +94,11 @@ dub/
 ├── app.py                    # Gradio UI entry point
 ├── modules/
 │   ├── asr.py                # Fish Audio ASR transcription
-│   ├── translation.py        # LLM-based translation
+│   ├── translation.py        # Ollama-based translation
 │   ├── tts.py                # Fish Audio TTS + voice cloning
 │   ├── audio_assembly.py     # Time-fitting + audio reassembly (FFmpeg)
 │   ├── output_writers.py     # Write transcript.json + .srt
 │   └── pipeline.py           # End-to-end orchestrator
-├── output/                   # Default output directory
 ├── requirements.txt
 ├── .env.example
 └── README.md
@@ -95,10 +108,15 @@ dub/
 
 | Env var | Default | Description |
 |---|---|---|
-| `FISH_AUDIO_API_KEY` | — | Required. Fish Audio API key |
-| `OPENAI_API_KEY` | — | Required. OpenAI API key for translation |
-| `LLM_MODEL` | `gpt-4o-mini` | OpenAI model for translation |
+| `FISH_AUDIO_API_KEY` | — | **Required.** Fish Audio API key |
+| `OLLAMA_MODEL` | `llama3.2:latest` | Ollama model for translation. `llama3.2:1b` is faster but may merge segments. |
 | `PORT` | `7860` | Port to run the Gradio server on |
+
+Ollama must be reachable at `http://localhost:11434` (the default after `ollama serve`).
+
+Translation is split into chunks of 10 segments per Ollama call so each request
+completes in bounded time on CPU, with per-chunk progress shown in the pipeline log.
+The first chunk of a session may take longer while Ollama loads the model into RAM.
 
 ## Notes & limitations (Phase A)
 
@@ -107,6 +125,7 @@ dub/
 - Very short segments (< 1 second) may produce lower-quality TTS
 - Time-fitting uses `atempo` (0.5–2.0× speed), with truncation/padding outside that range
 - The voice reference clip is extracted from the first ~12 seconds of the source audio
+- Translation speed depends on your hardware; a GPU makes Ollama significantly faster
 
 ## Phase B roadmap (not yet implemented)
 
