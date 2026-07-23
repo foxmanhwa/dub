@@ -13,6 +13,12 @@ from pathlib import Path
 _ATEMPO_MIN = 0.5
 _ATEMPO_MAX = 2.0
 
+# Maximum stretch we're willing to apply before preferring trim/pad over distortion.
+# Iterative retranslation tries to bring segments inside this range first; whatever
+# remains after retries is clamped here rather than stretched beyond recognition.
+SAFE_RATIO_MIN = 0.85
+SAFE_RATIO_MAX = 1.15
+
 
 # ── FFmpeg helpers ────────────────────────────────────────────────────────────
 
@@ -229,13 +235,14 @@ def time_fit_clip(
     sample_rate: int = 44100,
 ) -> str:
     """
-    Stretch or compress a TTS clip to exactly target_duration seconds.
+    Fit a TTS clip into target_duration using modest atempo stretch, then trim/pad.
 
-    Strategy:
-    - Zero/negative target_duration: transcode TTS as-is (can't compress to nothing).
-    - Ratio in [0.25, 4.0]: atempo filter (chained if needed).
-    - Zero-length source: synthesize silence.
-    - After atempo: trim/pad to exact target_duration.
+    Atempo is clamped to [SAFE_RATIO_MIN, SAFE_RATIO_MAX] (0.85–1.15×) so the
+    audio never sounds distorted.  When the raw ratio exceeds that range the clip
+    is stretched by at most the allowed amount, and the remaining gap is filled
+    with silence (too-short TTS) or trimmed (too-long TTS).  Iterative
+    retranslation in the TTS layer is the primary mechanism for bringing
+    segments into range before this function is called.
     """
     if target_duration <= 0:
         # Zero-duration ASR segment — keep the TTS clip at its natural length.
@@ -252,7 +259,7 @@ def time_fit_clip(
         ])
         return output_path
 
-    ratio = max(0.25, min(4.0, tts_dur / target_duration))
+    ratio = max(SAFE_RATIO_MIN, min(SAFE_RATIO_MAX, tts_dur / target_duration))
     atempo = _atempo_chain(ratio)
 
     _run([

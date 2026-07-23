@@ -210,6 +210,65 @@ def translate_chunk(
     return [{**seg, "translated_text": t} for seg, t in zip(chunk, translations)]
 
 
+def retranslate_for_duration(
+    translated_text: str,
+    original_text: str,
+    target_seconds: float,
+    target_language: str,
+    direction: str,
+    source_language: str | None = None,
+    model: str | None = None,
+    content_context: str | None = None,
+) -> str:
+    """
+    Ask the LLM for a duration-adjusted retranslation of a single segment.
+
+    direction: "shorter" (TTS ran over the slot) or "longer" (TTS was too short).
+    Returns the revised translated text, or "" if the LLM call fails.
+    """
+    if model is None:
+        model = os.environ.get("OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL)
+
+    # ~2.5 words/second is a reasonable cross-language spoken-pace estimate
+    word_target = max(1, round(target_seconds * 2.5))
+    src_hint = (
+        f" from {source_language}" if source_language and source_language != "auto" else ""
+    )
+
+    if direction == "shorter":
+        constraint = (
+            f"The previous translation was too long to fit the {target_seconds:.1f}-second audio slot. "
+            f"Write a more concise version (roughly {word_target} spoken words) that preserves the "
+            "core meaning. Cut filler and condense phrasing — do NOT drop essential content."
+        )
+    else:
+        constraint = (
+            f"The previous translation was too short for the {target_seconds:.1f}-second audio slot. "
+            f"Write a slightly expanded version (roughly {word_target} spoken words) that fills "
+            "the time naturally. Add natural phrasing or rephrase for clarity — do NOT invent "
+            "meaning that wasn't in the original."
+        )
+
+    system_prompt = (
+        f"You are a professional dubbing translator{src_hint} to {target_language}. "
+        f"{constraint}\n"
+        f"Return ONLY the revised {target_language} translation — no labels, prefixes, "
+        "brackets, or commentary."
+    )
+    if content_context:
+        system_prompt += f"\nContent context: {content_context}"
+
+    user_content = (
+        f"Original speech: {original_text}\n"
+        f"Previous translation: {translated_text}"
+    )
+
+    try:
+        return _llm_call(system_prompt, user_content, model).strip()
+    except Exception:
+        return ""
+
+
 def translate_segments(
     segments: list[dict],
     target_language: str,

@@ -543,9 +543,10 @@ def build_ui() -> gr.Blocks:
                 with gr.Tab("Timing Report"):
                     gr.Markdown(
                         "Ratio = TTS raw duration ÷ original slot. "
-                        "Values outside **0.7 – 1.4×** are flagged ⚠ "
-                        "(audio was stretched or compressed more than ~40%, "
-                        "which may sound unnatural)."
+                        "Values outside **0.85 – 1.15×** are flagged ⚠ "
+                        "(audio was stretched or compressed beyond the inaudible range; "
+                        "the pipeline retranslated these segments up to 2× before clamping). "
+                        "**↻N** in the Retries column shows how many retranslation attempts were made."
                     )
                     timing_table = gr.DataFrame(
                         label="Segment timing",

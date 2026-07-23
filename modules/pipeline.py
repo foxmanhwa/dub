@@ -19,7 +19,7 @@ from typing import Generator
 
 from .asr import transcribe
 from .segment_merger import merge_segments
-from .translation import translate_chunk, _tail_context, CHUNK_SIZE, back_translate_segments
+from .translation import translate_chunk, _tail_context, CHUNK_SIZE, back_translate_segments, retranslate_for_duration
 from .tts import build_voice_reference, synthesize_segments
 from .audio_assembly import (
     extract_audio,
@@ -440,6 +440,18 @@ def run_pipeline(
     yield f"Synthesizing TTS for {n_seg} non-overlap segment(s)…"
     tts_dir = str(work / "tts")
 
+    def _translate_retry(translated_text: str, original_text: str, target_secs: float, direction: str) -> str:
+        return retranslate_for_duration(
+            translated_text=translated_text,
+            original_text=original_text,
+            target_seconds=target_secs,
+            target_language=target_language,
+            direction=direction,
+            source_language=source_language,
+            model=ollama_model,
+            content_context=content_context,
+        )
+
     segments = synthesize_segments(
         segments,
         reference_audio_bytes=ref_audio_bytes,
@@ -447,9 +459,19 @@ def run_pipeline(
         reference_id=ref_id,
         speaker_references=speaker_references,
         output_dir=tts_dir,
+        translate_retry_fn=_translate_retry,
+        max_fit_retries=2,
     )
     done_count = sum(1 for s in segments if s.get("tts_path"))
+    retried = [(i, s) for i, s in enumerate(segments) if s.get("fit_retries", 0) > 0]
     yield f"TTS complete: {done_count}/{n_seg} segments synthesized."
+    if retried:
+        yield f"  {len(retried)} segment(s) needed translation retry for timing fit:"
+        for idx, s in retried:
+            n = s["fit_retries"]
+            yield (
+                f"    seg {idx} (↻{n}): {s.get('translated_text', '')[:70]!r}"
+            )
 
     for i, s in enumerate(segments):
         if not s.get("tts_path"):
