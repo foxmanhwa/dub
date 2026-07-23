@@ -36,6 +36,7 @@ from .timing_report import build_timing_report, timing_report_to_df, backtrans_t
 REFERENCE_CLIP_DURATION = 12.0
 MAX_REFERENCE_TEXT_CHARS = 300
 MIN_CLONE_DURATION = 15.0
+MIN_REF_DURATION = float(os.environ.get("MIN_REF_DURATION_SECS", "6.0"))
 
 
 def _ram_info() -> tuple[float, float] | None:
@@ -254,7 +255,7 @@ def run_pipeline(
     ref_text: str = ""
     ref_id: str | None = None
     ref_wav: str | None = None
-    speaker_references: dict[str, tuple[bytes, str]] | None = None
+    speaker_references: dict[str, tuple[bytes | None, str, str | None]] | None = None
     speaker_ref_wavs: dict[str, str] = {}  # speaker_id → wav_path (for UI save panel)
 
     if voice_mode == "clone":
@@ -277,30 +278,48 @@ def run_pipeline(
                 overlap_regions=overlap_regions,
             )
 
+            fallback_voice_id = os.environ.get("FALLBACK_VOICE_ID")
             speaker_references = {}
             for spk, (wav_path, duration) in speaker_clip_results.items():
-                ref_bytes, _ = build_voice_reference(wav_path)
-                spk_text = " ".join(
-                    s["text"] for s in segments if s.get("speaker") == spk
-                )[:MAX_REFERENCE_TEXT_CHARS]
-                speaker_references[spk] = (ref_bytes, spk_text)
-                speaker_ref_wavs[spk] = wav_path
-                if duration >= 8.0:
-                    quality = "OK"
-                elif duration >= 3.0:
-                    quality = "⚠ short — voice quality may be weaker"
+                if duration >= MIN_REF_DURATION:
+                    ref_bytes, _ = build_voice_reference(wav_path)
+                    spk_text = " ".join(
+                        s["text"] for s in segments if s.get("speaker") == spk
+                    )[:MAX_REFERENCE_TEXT_CHARS]
+                    speaker_references[spk] = (ref_bytes, spk_text, None)
+                    speaker_ref_wavs[spk] = wav_path
+                    yield f"  {spk} reference: {duration:.1f}s [OK — cloning]"
+                elif fallback_voice_id:
+                    speaker_references[spk] = (None, "", fallback_voice_id)
+                    yield (
+                        f"  {spk} reference: {duration:.1f}s — too short "
+                        f"(< {MIN_REF_DURATION:.0f}s); using library voice '{fallback_voice_id}' instead"
+                    )
                 else:
-                    quality = "⚠ very short — voice cloning will be unreliable"
-                yield f"  {spk} reference: {duration:.1f}s [{quality}]"
+                    ref_bytes, _ = build_voice_reference(wav_path)
+                    spk_text = " ".join(
+                        s["text"] for s in segments if s.get("speaker") == spk
+                    )[:MAX_REFERENCE_TEXT_CHARS]
+                    speaker_references[spk] = (ref_bytes, spk_text, None)
+                    speaker_ref_wavs[spk] = wav_path
+                    quality_tag = "⚠ very short" if duration < 3.0 else "⚠ short"
+                    yield (
+                        f"  {spk} reference: {duration:.1f}s [{quality_tag} — cloning anyway; "
+                        "set FALLBACK_VOICE_ID in .env for automatic library fallback]"
+                    )
 
             # Any speaker tagged in segments but missing from diarization clips
             # (e.g. very few lines with no long-enough segment) gets the global fallback.
             for spk in detected_speakers - set(speaker_references):
                 yield f"  {spk}: no usable audio found — will use best available reference as fallback"
 
-            # Primary ref_wav = longest-reference speaker (used for the save panel)
-            if speaker_clip_results:
-                primary_spk = max(speaker_clip_results, key=lambda k: speaker_clip_results[k][1])
+            # Primary ref_wav = longest clone-mode speaker (used for the save panel and
+            # as global fallback for any segment whose speaker isn't in speaker_references).
+            if speaker_ref_wavs:
+                primary_spk = max(
+                    speaker_ref_wavs,
+                    key=lambda k: speaker_clip_results.get(k, (None, 0.0))[1],
+                )
                 ref_wav = speaker_ref_wavs[primary_spk]
                 ref_audio_bytes, _ = build_voice_reference(ref_wav)
                 ref_text = speaker_references[primary_spk][1]

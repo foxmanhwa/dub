@@ -114,6 +114,8 @@ Open [http://localhost:7860](http://localhost:7860) in your browser.
 | `TRANSLATION_BACKEND` | auto | Force a backend: `groq`, `gemini`, or `ollama`. Auto-selects Groq → Gemini → Ollama by which key is present. |
 | `OLLAMA_MODEL` | `llama3.2:latest` | Ollama model (only used when backend is `ollama`). |
 | `HF_TOKEN` | — | Hugging Face token for pyannote diarization (Phase B). |
+| `FALLBACK_VOICE_ID` | — | Fish Audio library voice ID to use when a speaker's reference clip is shorter than `MIN_REF_DURATION_SECS`. Avoids forcing a poor clone through. Find IDs at fish.audio/model. |
+| `MIN_REF_DURATION_SECS` | `6.0` | Minimum seconds of clean reference audio required before attempting voice cloning. Speakers below this threshold fall back to `FALLBACK_VOICE_ID` (if set) or clone with a quality warning. |
 | `HOST` | `127.0.0.1` | Server bind address. Set to `0.0.0.0` to expose on the local network. |
 | `PORT` | `7860` | Port to run the Gradio server on. |
 

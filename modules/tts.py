@@ -86,7 +86,7 @@ def synthesize_segments(
     reference_audio_bytes: bytes | None = None,
     reference_text: str = "",
     reference_id: str | None = None,
-    speaker_references: "dict[str, tuple[bytes, str]] | None" = None,
+    speaker_references: "dict[str, tuple[bytes | None, str, str | None]] | None" = None,
     output_dir: str = "output",
     progress_cb=None,
 ) -> list[dict]:
@@ -96,9 +96,10 @@ def synthesize_segments(
     Supply either reference_audio_bytes (clone) or reference_id (library/saved model)
     as the global fallback reference.
 
-    speaker_references: optional dict {speaker_id: (audio_bytes, ref_text)}.
-    When provided, each segment's "speaker" field is used to look up its own
-    reference clip; falls back to the global reference if the speaker is absent.
+    speaker_references: optional dict {speaker_id: (audio_bytes_or_None, ref_text, reference_id_or_None)}.
+      - (bytes, ref_text, None)  → instant voice clone for this speaker
+      - (None, "", voice_id)     → Fish Audio library voice fallback for this speaker
+    Falls back to the global reference when a segment's speaker is absent from the dict.
 
     Adds "tts_path" key to each segment.  Segments without translated_text get tts_path=None.
     progress_cb: optional callable(done, total).
@@ -126,10 +127,21 @@ def synthesize_segments(
         # Per-speaker reference lookup
         seg_ref_bytes = reference_audio_bytes
         seg_ref_text = reference_text
+        seg_ref_id = reference_id
         if speaker_references:
             speaker = seg.get("speaker")
             if speaker and speaker in speaker_references:
-                seg_ref_bytes, seg_ref_text = speaker_references[speaker]
+                spk_bytes, spk_text, spk_id = speaker_references[speaker]
+                if spk_id is not None:
+                    # Library voice fallback for this speaker
+                    seg_ref_id = spk_id
+                    seg_ref_bytes = None
+                    seg_ref_text = ""
+                else:
+                    # Instant clone for this speaker
+                    seg_ref_bytes = spk_bytes
+                    seg_ref_text = spk_text
+                    seg_ref_id = None
             elif speaker:
                 print(f"[TTS] seg {i}: speaker {speaker!r} not in speaker_references — using global ref")
 
@@ -138,7 +150,7 @@ def synthesize_segments(
                 text=text,
                 reference_audio_bytes=seg_ref_bytes,
                 reference_text=seg_ref_text,
-                reference_id=reference_id,
+                reference_id=seg_ref_id,
             )
             path = out / f"seg_{i:04d}.mp3"
             path.write_bytes(audio)
