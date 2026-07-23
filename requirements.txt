@@ -1,0 +1,21 @@
+gradio>=4.44.0
+httpx>=0.27.0
+msgpack>=1.0.8
+python-dotenv>=1.0.0
+
+# Translation — Groq (default), Gemini, or Ollama (fallback)
+groq>=0.11.0
+google-genai>=1.0.0
+
+# Music / vocal separation (Demucs)
+# Install torch first for your platform: https://pytorch.org/get-started/locally/
+# Then:
+demucs>=4.0.0
+
+# Phase B — overlapping-speaker handling
+# Install torch/torchaudio first for your platform: https://pytorch.org/get-started/locally/
+# Then:
+pyannote.audio>=3.1.0
+speechbrain>=1.0.0
+# torchaudio is a transitive dep of both above but pin it explicitly:
+torchaudio>=2.0.0
