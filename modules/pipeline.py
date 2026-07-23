@@ -104,6 +104,11 @@ def run_pipeline(
                 yield "Music separation disabled — " + "; ".join(_ms_issues)
             else:
                 vocals_wav, music_wav = separate_music(audio_wav, str(work / "demucs"))
+                # Demucs outputs stereo WAV; convert to mono so ASR, diarization,
+                # reference extraction, and assembly all get a consistent format.
+                vocals_mono = str(work / "vocals_mono.wav")
+                extract_audio(vocals_wav, vocals_mono)
+                vocals_wav = vocals_mono
                 yield "Music separation complete — pipeline will run on vocals stem only."
         except Exception as exc:
             yield f"Music separation failed ({exc}); falling back to full-audio mode."
