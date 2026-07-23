@@ -59,7 +59,9 @@
       "Bash(.venv/Scripts/pip show *)",
       "PowerShell(Start-Sleep 10; \\(Invoke-WebRequest -Uri \"http://localhost:7860/\" -UseBasicParsing -TimeoutSec 5 -ErrorAction SilentlyContinue\\).StatusCode; Get-Content \"C:\\\\Users\\\\Pc\\\\AppData\\\\Local\\\\Temp\\\\app_groq.log\" -ErrorAction SilentlyContinue | Select-Object -Last 5)",
       "PowerShell(& \"C:\\\\Users\\\\Pc\\\\Documents\\\\GitHub\\\\dub\\\\.venv\\\\Scripts\\\\pip.exe\" show gradio pillow starlette orjson 2>&1 | Select-String \"^Name:|^Version:\")",
-      "Bash(git config *)"
+      "Bash(git config *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
     ]
   }
 }
