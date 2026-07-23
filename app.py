@@ -192,6 +192,8 @@ def generate_redub(
     handle_overlaps: bool,
     preserve_music: bool,
     content_context: str,
+    fallback_voice_id: str,
+    min_ref_duration: float,
     progress=gr.Progress(track_tqdm=False),
 ):
     """
@@ -254,6 +256,8 @@ def generate_redub(
             handle_overlaps=handle_overlaps,
             preserve_music=preserve_music,
             content_context=content_context.strip() or None,
+            fallback_voice_id=fallback_voice_id.strip() or None,
+            min_ref_duration=min_ref_duration,
         )
         for item in gen:
             if isinstance(item, str):
@@ -383,12 +387,35 @@ def build_ui() -> gr.Blocks:
                         label="Voice source",
                     )
 
-                    # Clone info hint
+                    # Clone info hint + advanced settings
                     with gr.Group(visible=True) as clone_group:
                         gr.Markdown(
                             "_Clones the speaker's voice from your video. "
-                            "Best with **15 s+** of clean speech._"
+                            "Best with **15 s+** of clean speech. "
+                            "Reference clips are loudness-normalized automatically._"
                         )
+                        with gr.Accordion("Advanced clone settings", open=False):
+                            min_ref_dur_slider = gr.Slider(
+                                label="Min reference duration (s)",
+                                minimum=2.0,
+                                maximum=15.0,
+                                step=0.5,
+                                value=6.0,
+                                info=(
+                                    "Multi-speaker mode: speakers with less clean audio "
+                                    "than this threshold use the fallback voice instead of cloning."
+                                ),
+                            )
+                            fallback_voice_input = gr.Textbox(
+                                label="Fallback voice ID (for short references)",
+                                placeholder="Fish Audio voice ID",
+                                info=(
+                                    "When a speaker's reference is below the threshold, "
+                                    "use this Fish Audio library voice instead of a weak clone. "
+                                    "Find IDs at fish.audio/model — copy the ID from the model URL. "
+                                    "Leave blank to clone anyway with a quality warning."
+                                ),
+                            )
 
                     # Library voice picker
                     with gr.Group(visible=False) as library_group:
@@ -623,7 +650,7 @@ def build_ui() -> gr.Blocks:
                 video_input, source_lang, target_lang,
                 voice_mode_radio, library_voice_dd, saved_voice_dd,
                 back_trans_check, handle_overlaps_check, preserve_music_check,
-                content_context_box,
+                content_context_box, fallback_voice_input, min_ref_dur_slider,
             ],
             outputs=[
                 log_box, redubbed_player, transcript_dl, srt_dl, original_player,

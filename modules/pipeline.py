@@ -71,6 +71,8 @@ def run_pipeline(
     handle_overlaps: bool = False,
     preserve_music: bool = False,
     content_context: str | None = None,
+    fallback_voice_id: str | None = None,
+    min_ref_duration: float | None = None,
 ) -> Generator[str | dict, None, None]:
     """
     Generator yielding str (progress) then dict (output paths) at the end.
@@ -278,10 +280,11 @@ def run_pipeline(
                 overlap_regions=overlap_regions,
             )
 
-            fallback_voice_id = os.environ.get("FALLBACK_VOICE_ID")
+            _fallback_vid = fallback_voice_id or os.environ.get("FALLBACK_VOICE_ID")
+            _min_ref_dur = min_ref_duration if min_ref_duration is not None else MIN_REF_DURATION
             speaker_references = {}
             for spk, (wav_path, duration) in speaker_clip_results.items():
-                if duration >= MIN_REF_DURATION:
+                if duration >= _min_ref_dur:
                     ref_bytes, _ = build_voice_reference(wav_path)
                     spk_text = " ".join(
                         s["text"] for s in segments if s.get("speaker") == spk
@@ -289,11 +292,11 @@ def run_pipeline(
                     speaker_references[spk] = (ref_bytes, spk_text, None)
                     speaker_ref_wavs[spk] = wav_path
                     yield f"  {spk} reference: {duration:.1f}s [OK — cloning]"
-                elif fallback_voice_id:
-                    speaker_references[spk] = (None, "", fallback_voice_id)
+                elif _fallback_vid:
+                    speaker_references[spk] = (None, "", _fallback_vid)
                     yield (
                         f"  {spk} reference: {duration:.1f}s — too short "
-                        f"(< {MIN_REF_DURATION:.0f}s); using library voice '{fallback_voice_id}' instead"
+                        f"(< {_min_ref_dur:.0f}s); using library voice '{_fallback_vid}' instead"
                     )
                 else:
                     ref_bytes, _ = build_voice_reference(wav_path)
@@ -305,7 +308,8 @@ def run_pipeline(
                     quality_tag = "⚠ very short" if duration < 3.0 else "⚠ short"
                     yield (
                         f"  {spk} reference: {duration:.1f}s [{quality_tag} — cloning anyway; "
-                        "set FALLBACK_VOICE_ID in .env for automatic library fallback]"
+                        "set a Fallback voice ID in the UI (or FALLBACK_VOICE_ID in .env) "
+                        "for automatic library fallback]"
                     )
 
             # Any speaker tagged in segments but missing from diarization clips
