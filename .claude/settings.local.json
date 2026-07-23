@@ -58,7 +58,8 @@
       "PowerShell(Start-Process -FilePath \"C:\\\\Users\\\\Pc\\\\Documents\\\\GitHub\\\\dub\\\\.venv\\\\Scripts\\\\python.exe\" -ArgumentList \"app.py\" -WorkingDirectory \"C:\\\\Users\\\\Pc\\\\Documents\\\\GitHub\\\\dub\" -RedirectStandardOutput \"C:\\\\Users\\\\Pc\\\\AppData\\\\Local\\\\Temp\\\\app_out.txt\" -RedirectStandardError \"C:\\\\Users\\\\Pc\\\\AppData\\\\Local\\\\Temp\\\\app_err.txt\" -NoNewWindow; Start-Sleep 10; Get-Content \"C:\\\\Users\\\\Pc\\\\AppData\\\\Local\\\\Temp\\\\app_err.txt\" -ErrorAction SilentlyContinue | Select-Object -Last 10)",
       "Bash(.venv/Scripts/pip show *)",
       "PowerShell(Start-Sleep 10; \\(Invoke-WebRequest -Uri \"http://localhost:7860/\" -UseBasicParsing -TimeoutSec 5 -ErrorAction SilentlyContinue\\).StatusCode; Get-Content \"C:\\\\Users\\\\Pc\\\\AppData\\\\Local\\\\Temp\\\\app_groq.log\" -ErrorAction SilentlyContinue | Select-Object -Last 5)",
-      "PowerShell(& \"C:\\\\Users\\\\Pc\\\\Documents\\\\GitHub\\\\dub\\\\.venv\\\\Scripts\\\\pip.exe\" show gradio pillow starlette orjson 2>&1 | Select-String \"^Name:|^Version:\")"
+      "PowerShell(& \"C:\\\\Users\\\\Pc\\\\Documents\\\\GitHub\\\\dub\\\\.venv\\\\Scripts\\\\pip.exe\" show gradio pillow starlette orjson 2>&1 | Select-String \"^Name:|^Version:\")",
+      "Bash(git config *)"
     ]
   }
 }
