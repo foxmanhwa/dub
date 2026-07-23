@@ -85,14 +85,46 @@ set USE_OLLAMA=n
 set OLLAMA_READY=0
 
 echo  Detecting GPU...
-nvidia-smi >nul 2>&1
-if errorlevel 1 goto :no_gpu
+
+REM -- Try nvidia-smi first (present when CUDA driver is on PATH)
+set GPU_NAME=
+nvidia-smi --query-gpu=name --format=csv,noheader >"%TEMP%\_dub_gpu.txt" 2>nul
+if not errorlevel 1 (
+    set /p GPU_NAME=<"%TEMP%\_dub_gpu.txt"
+)
+if not "!GPU_NAME!"=="" (
+    echo  [OK] NVIDIA GPU detected via nvidia-smi: !GPU_NAME!
+    goto :gpu_detected
+)
+
+REM -- wmic fallback: works even when nvidia-smi is not on PATH
+echo  nvidia-smi not found on PATH -- checking via wmic...
+wmic path Win32_VideoController get Name /format:list 2>nul >"%TEMP%\_dub_wmic.txt"
+for /f "tokens=2 delims==" %%g in ('findstr /i "NVIDIA" "%TEMP%\_dub_wmic.txt" 2^>nul') do set GPU_NAME=%%g
+if not "!GPU_NAME!"=="" (
+    echo  [OK] NVIDIA GPU detected via wmic: !GPU_NAME!
+    goto :gpu_detected
+)
+
+goto :no_gpu
 
 REM === NVIDIA GPU FOUND ========================================================
+:gpu_detected
 set GPU_FOUND=1
-echo  [OK] NVIDIA GPU detected! Installing CUDA-enabled PyTorch (CUDA 12.1^)...
+echo  Installing CUDA-enabled PyTorch (CUDA 12.1^)...
 echo.
-pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+pip install --upgrade torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+echo.
+
+REM -- Verify the CUDA build actually installed (pip can silently downgrade)
+echo  Verifying CUDA build...
+python -c "import torch; ok='+cu' in torch.__version__; print('  torch', torch.__version__, '-- CUDA available:', torch.cuda.is_available()); exit(0 if ok else 1)"
+if errorlevel 1 (
+    echo.
+    echo  WARNING: pip installed a CPU-only PyTorch. Forcing CUDA reinstall...
+    pip install --upgrade --force-reinstall torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+    python -c "import torch; print('  torch', torch.__version__, '-- CUDA available:', torch.cuda.is_available())"
+)
 echo.
 
 echo  --------------------------------------------------------
@@ -175,6 +207,16 @@ if errorlevel 1 (
     echo  ERROR: pip install failed. See output above.
     pause
     exit /b 1
+)
+
+REM -- requirements.txt can pull in CPU torch as a transitive dep; fix if so
+if "!GPU_FOUND!"=="1" (
+    python -c "import torch; exit(0 if '+cu' in torch.__version__ else 1)" >nul 2>&1
+    if errorlevel 1 (
+        echo.
+        echo  [WARN] requirements.txt overwrote PyTorch with a CPU build. Reinstalling CUDA build...
+        pip install --upgrade --force-reinstall torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+    )
 )
 echo.
 echo  [OK] All dependencies installed.
