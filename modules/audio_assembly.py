@@ -57,18 +57,28 @@ def extract_reference_clip(
     return output_path
 
 
-def mux_audio_into_video(video_path: str, audio_path: str, output_path: str) -> str:
+def mux_audio_into_video(
+    video_path: str,
+    audio_path: str,
+    output_path: str,
+    stereo: bool = False,
+) -> str:
     """Replace the audio track of video_path with audio_path."""
-    _run([
+    cmd = [
         "ffmpeg", "-y",
         "-i", video_path, "-i", audio_path,
         "-c:v", "copy",
-        "-c:a", "aac", "-ac", "1",          # explicit codec + mono
+        "-c:a", "aac",
+    ]
+    if not stereo:
+        cmd += ["-ac", "1"]   # lock to mono for voice-only output
+    cmd += [
         "-map", "0:v:0", "-map", "1:a:0",
-        "-movflags", "+faststart",            # moov atom at front for browser play
+        "-movflags", "+faststart",
         "-shortest",
         output_path,
-    ])
+    ]
+    _run(cmd)
     return output_path
 
 

@@ -34,7 +34,10 @@ def build_timing_report(segments: list[dict]) -> list[dict]:
         if tts_dur is not None and orig_dur > 0:
             ratio = tts_dur / orig_dur
 
-        if tts_path is None:
+        if seg.get("is_overlap"):
+            n_streams = len(seg.get("speaker_data") or [])
+            status = f"⚡ overlap ({n_streams} streams)"
+        elif tts_path is None:
             status = "no audio"
         elif tts_dur is None:
             status = "probe failed"

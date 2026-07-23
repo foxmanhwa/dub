@@ -90,6 +90,31 @@ def check_env() -> list[str]:
     return warnings
 
 
+def check_overlap_env() -> list[str]:
+    """Non-fatal warnings shown in the overlap checkbox label.
+    Uses find_spec only — never imports pyannote/speechbrain at startup, since
+    those drag in lightning + torch._dynamo which permanently occupy hundreds of MB.
+    """
+    import importlib.util
+    issues = []
+    if not os.environ.get("HF_TOKEN"):
+        issues.append("HF_TOKEN not set (needed for pyannote diarization)")
+    if importlib.util.find_spec("pyannote") is None:
+        issues.append("pyannote.audio not installed")
+    if importlib.util.find_spec("speechbrain") is None:
+        issues.append("speechbrain not installed")
+    return issues
+
+
+def check_music_env() -> list[str]:
+    """Non-fatal warnings shown in the music preservation checkbox label."""
+    try:
+        import demucs  # noqa: F401
+        return []
+    except ImportError:
+        return ["demucs not installed  (pip install demucs)"]
+
+
 # ── Voice library helpers ─────────────────────────────────────────────────────
 
 def _refresh_library_voices(language: str):
@@ -165,6 +190,9 @@ def generate_redub(
     library_voice_id: str | None,
     saved_voice_name: str | None,
     run_backtranslation: bool,
+    handle_overlaps: bool,
+    preserve_music: bool,
+    content_context: str,
     progress=gr.Progress(track_tqdm=False),
 ):
     """
@@ -222,6 +250,9 @@ def generate_redub(
             voice_mode=voice_mode,
             voice_id=voice_id,
             run_backtranslation=run_backtranslation,
+            handle_overlaps=handle_overlaps,
+            preserve_music=preserve_music,
+            content_context=content_context.strip() or None,
         )
         for item in gen:
             if isinstance(item, str):
@@ -282,9 +313,12 @@ def build_ui() -> gr.Blocks:
     with gr.Blocks(title="Video Redubbing — Fish Audio") as demo:
         gr.Markdown("# Video Redubbing & Localization")
         gr.Markdown(
-            "Upload a single-speaker video. The app transcribes, translates, "
-            "and regenerates speech in the target language — "
-            "powered by **Fish Audio** + a local LLM."
+            "Upload a video and get a full dubbed version in your target language. "
+            "Supports **vocal/music separation** (Demucs) to preserve background music while dubbing dialogue, "
+            "and handles **overlapping multi-speaker** audio by separating simultaneous speech into "
+            "clean per-speaker streams, dubbing each independently, and re-mixing. "
+            "Powered by **Fish Audio** (ASR + TTS) + **Demucs** (music separation) + "
+            "**pyannote** (diarization) + **Groq / Gemini / Ollama** (translation)."
         )
 
         if warn_text:
@@ -307,6 +341,17 @@ def build_ui() -> gr.Blocks:
                         choices=tgt_choices,
                         value="English",
                     )
+
+                content_context_box = gr.Textbox(
+                    label="Content context (optional)",
+                    placeholder=(
+                        "Briefly describe the video: characters, setting, tone, "
+                        "or terminology to preserve. E.g. 'Action anime — protagonist Ryuu "
+                        "is brash; keep honorifics like -san. Avoid casual slang.'"
+                    ),
+                    lines=2,
+                    max_lines=5,
+                )
 
                 # ── Voice selection ──────────────────────────────────────────
                 with gr.Accordion("Voice Selection", open=True):
@@ -376,9 +421,51 @@ def build_ui() -> gr.Blocks:
                             )
 
                 back_trans_check = gr.Checkbox(
-                    label="Run back-translation QA (adds ~1 min for Ollama round-trip)",
+                    label="Run back-translation QA (adds an extra translation round-trip)",
                     value=False,
                 )
+
+                _overlap_issues = check_overlap_env()
+                _overlap_label = (
+                    "⚡ Detect & handle overlapping speakers (Phase B)"
+                    if not _overlap_issues
+                    else (
+                        "⚡ Detect & handle overlapping speakers (Phase B) "
+                        "— ⚠ " + "; ".join(_overlap_issues)
+                    )
+                )
+                handle_overlaps_check = gr.Checkbox(
+                    label=_overlap_label,
+                    value=not bool(_overlap_issues),
+                    info=(
+                        "Uses pyannote diarization + SepFormer separation to split "
+                        "overlapping-speech windows into clean per-speaker streams, "
+                        "then dubs each independently and re-mixes. "
+                        "Requires HF_TOKEN in .env, pyannote.audio, and speechbrain."
+                    ),
+                )
+
+                _music_issues = check_music_env()
+                _music_label = (
+                    "Preserve background music (Demucs vocal separation)"
+                    if not _music_issues
+                    else (
+                        "Preserve background music (Demucs) — ⚠ "
+                        + "; ".join(_music_issues)
+                    )
+                )
+                preserve_music_check = gr.Checkbox(
+                    label=_music_label,
+                    value=not bool(_music_issues),
+                    info=(
+                        "Separates the audio into a vocals stem (processed: ASR → translate → TTS) "
+                        "and a background music / instrumental stem (kept untouched), "
+                        "then re-mixes them into a stereo output. "
+                        "First run downloads ~200 MB of Demucs weights; subsequent runs are instant. "
+                        "Disable for clips with no background music to skip the separation step."
+                    ),
+                )
+
                 generate_btn = gr.Button("Generate Redub", variant="primary", size="lg")
 
             # ── Right column: progress ───────────────────────────────────────
@@ -509,7 +596,8 @@ def build_ui() -> gr.Blocks:
             inputs=[
                 video_input, source_lang, target_lang,
                 voice_mode_radio, library_voice_dd, saved_voice_dd,
-                back_trans_check,
+                back_trans_check, handle_overlaps_check, preserve_music_check,
+                content_context_box,
             ],
             outputs=[
                 log_box, redubbed_player, transcript_dl, srt_dl, original_player,
