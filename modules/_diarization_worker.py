@@ -144,6 +144,27 @@ def _as_annotation(result):
     )
 
 
+def _load_waveform(audio_path: str):
+    """
+    Load audio as a torchaudio tensor so pyannote can accept a pre-loaded waveform
+    dict instead of a file path.  This bypasses torchcodec's FFmpeg DLL loader,
+    which fails on Windows when the FFmpeg DLLs are absent or version-mismatched.
+
+    Returns (waveform [1, samples], sample_rate) or None on failure.
+    """
+    try:
+        import torchaudio  # already required by pyannote; always present
+        waveform, sample_rate = torchaudio.load(audio_path)
+        if waveform.shape[0] > 1:
+            waveform = waveform.mean(dim=0, keepdim=True)
+        return waveform, sample_rate
+    except Exception as exc:
+        print(f"[diarization] torchaudio.load failed ({exc}); "
+              "falling back to pipeline(path) — torchcodec may error on Windows",
+              file=sys.stderr)
+        return None
+
+
 def _run_diarization(audio_path: str) -> dict:
     hf_token = os.environ.get("HF_TOKEN")
     if not hf_token:
@@ -151,7 +172,12 @@ def _run_diarization(audio_path: str) -> dict:
 
     pipeline = _load_pipeline(hf_token)
 
-    raw = pipeline(audio_path)
+    waveform_data = _load_waveform(audio_path)
+    if waveform_data is not None:
+        waveform, sample_rate = waveform_data
+        raw = pipeline({"waveform": waveform, "sample_rate": sample_rate})
+    else:
+        raw = pipeline(audio_path)
     diarization = _as_annotation(raw)
 
     segments = [
