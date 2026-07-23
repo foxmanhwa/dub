@@ -24,6 +24,7 @@ from .tts import build_voice_reference, synthesize_segments
 from .audio_assembly import (
     extract_audio,
     extract_reference_clip,
+    extract_speaker_reference_clips,
     assemble_audio_track,
     mux_audio_into_video,
     get_duration,
@@ -127,6 +128,7 @@ def run_pipeline(
 
     # ── Step 2c (Phase B): speaker diarization + overlap detection ────────────
     overlap_regions: list[dict] = []
+    dia_segments: list[dict] = []  # raw diarization speaker segments (saved for ref extraction)
 
     if handle_overlaps:
         yield "Phase B: running speaker diarization…"
@@ -139,6 +141,7 @@ def run_pipeline(
                 dia = run_diarization(vocals_wav)
                 num_spk = dia["num_speakers"]
                 overlap_regions = dia["overlap_regions"]
+                dia_segments = dia["segments"]
                 segments = assign_speakers_to_segments(
                     segments, dia["segments"], overlap_regions
                 )
@@ -239,7 +242,7 @@ def run_pipeline(
     # ── Step 3b (optional): back-translation QA ──────────────────────────────
     if run_backtranslation:
         yield "Running back-translation QA…"
-        segments = back_translate_segments(segments, model=ollama_model)
+        segments = back_translate_segments(segments, model=ollama_model, source_language=source_language)
         flagged = sum(
             1 for s in segments
             if s.get("back_trans_similarity") is not None and s["back_trans_similarity"] < 0.5
@@ -251,6 +254,8 @@ def run_pipeline(
     ref_text: str = ""
     ref_id: str | None = None
     ref_wav: str | None = None
+    speaker_references: dict[str, tuple[bytes, str]] | None = None
+    speaker_ref_wavs: dict[str, str] = {}  # speaker_id → wav_path (for UI save panel)
 
     if voice_mode == "clone":
         if total_duration < MIN_CLONE_DURATION:
@@ -258,14 +263,61 @@ def run_pipeline(
                 f"WARNING: Video is only {total_duration:.1f}s — voice cloning may produce "
                 "poor quality. Consider a library or saved voice."
             )
-        yield "Extracting voice reference clip…"
-        ref_wav = str(work / "reference.wav")
-        ref_start = min(2.0, segments[0]["start"]) if segments else 0.0
-        # Use vocals_wav when available — cleaner signal without background music
-        extract_reference_clip(vocals_wav, ref_wav, start=ref_start, duration=REFERENCE_CLIP_DURATION)
-        ref_audio_bytes, _ = build_voice_reference(ref_wav)
-        ref_text = " ".join(s["text"] for s in segments)[:MAX_REFERENCE_TEXT_CHARS]
-        yield "Voice reference ready."
+
+        detected_speakers = {s.get("speaker", "SPEAKER_00") for s in segments}
+        use_per_speaker = len(detected_speakers) > 1 and bool(dia_segments)
+
+        if use_per_speaker:
+            yield f"Building per-speaker voice references ({len(detected_speakers)} speakers)…"
+            speaker_clip_results = extract_speaker_reference_clips(
+                vocals_wav,
+                dia_segments,
+                work_dir=str(work / "speaker_refs"),
+                target_duration=REFERENCE_CLIP_DURATION,
+                overlap_regions=overlap_regions,
+            )
+
+            speaker_references = {}
+            for spk, (wav_path, duration) in speaker_clip_results.items():
+                ref_bytes, _ = build_voice_reference(wav_path)
+                spk_text = " ".join(
+                    s["text"] for s in segments if s.get("speaker") == spk
+                )[:MAX_REFERENCE_TEXT_CHARS]
+                speaker_references[spk] = (ref_bytes, spk_text)
+                speaker_ref_wavs[spk] = wav_path
+                if duration >= 8.0:
+                    quality = "OK"
+                elif duration >= 3.0:
+                    quality = "⚠ short — voice quality may be weaker"
+                else:
+                    quality = "⚠ very short — voice cloning will be unreliable"
+                yield f"  {spk} reference: {duration:.1f}s [{quality}]"
+
+            # Any speaker tagged in segments but missing from diarization clips
+            # (e.g. very few lines with no long-enough segment) gets the global fallback.
+            for spk in detected_speakers - set(speaker_references):
+                yield f"  {spk}: no usable audio found — will use best available reference as fallback"
+
+            # Primary ref_wav = longest-reference speaker (used for the save panel)
+            if speaker_clip_results:
+                primary_spk = max(speaker_clip_results, key=lambda k: speaker_clip_results[k][1])
+                ref_wav = speaker_ref_wavs[primary_spk]
+                ref_audio_bytes, _ = build_voice_reference(ref_wav)
+                ref_text = speaker_references[primary_spk][1]
+
+            yield "Per-speaker voice references ready."
+
+        else:
+            yield "Extracting voice reference clip…"
+            ref_wav = str(work / "reference.wav")
+            ref_start = min(2.0, segments[0]["start"]) if segments else 0.0
+            # Use vocals_wav when available — cleaner signal without background music
+            extract_reference_clip(vocals_wav, ref_wav, start=ref_start, duration=REFERENCE_CLIP_DURATION)
+            ref_audio_bytes, _ = build_voice_reference(ref_wav)
+            ref_text = " ".join(s["text"] for s in segments)[:MAX_REFERENCE_TEXT_CHARS]
+            if ref_wav:
+                speaker_ref_wavs["SPEAKER_00"] = ref_wav
+            yield "Voice reference ready."
 
     elif voice_mode == "library":
         if not voice_id:
@@ -370,6 +422,7 @@ def run_pipeline(
         reference_audio_bytes=ref_audio_bytes,
         reference_text=ref_text,
         reference_id=ref_id,
+        speaker_references=speaker_references,
         output_dir=tts_dir,
     )
     done_count = sum(1 for s in segments if s.get("tts_path"))
@@ -463,6 +516,7 @@ def run_pipeline(
         "transcript": transcript_path,
         "srt": srt_path,
         "ref_wav": ref_wav,
+        "speaker_ref_wavs": speaker_ref_wavs,
         "timing_df": timing_df,
         "timing_csv": timing_csv_path,
         "backtrans_df": backtrans_df,

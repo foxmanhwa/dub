@@ -108,11 +108,10 @@ def check_overlap_env() -> list[str]:
 
 def check_music_env() -> list[str]:
     """Non-fatal warnings shown in the music preservation checkbox label."""
-    try:
-        import demucs  # noqa: F401
-        return []
-    except ImportError:
+    import importlib.util
+    if importlib.util.find_spec("demucs") is None:
         return ["demucs not installed  (pip install demucs)"]
+    return []
 
 
 # ── Voice library helpers ─────────────────────────────────────────────────────
@@ -196,9 +195,9 @@ def generate_redub(
     progress=gr.Progress(track_tqdm=False),
 ):
     """
-    Generator yielding 12-tuple:
+    Generator yielding 13-tuple:
       log, out_video, transcript, srt, orig_video,
-      ref_wav_state, save_group_update, save_status,
+      speaker_refs_state, save_group_update, save_speaker_dd_update, save_status,
       timing_table, backtrans_table, timing_csv_dl, backtrans_csv_dl
     """
     log_lines: list[str] = []
@@ -208,7 +207,8 @@ def generate_redub(
         return "\n".join(log_lines)
 
     # Placeholder for all outputs after log when something goes wrong early
-    _EMPTY = (None, None, None, None, None, gr.update(visible=False), "",
+    _EMPTY = (None, None, None, None,
+              {}, gr.update(visible=False), gr.update(visible=False, choices=[]), "",
               None, None, None, None)
 
     missing = check_env()
@@ -238,7 +238,8 @@ def generate_redub(
 
     output_dir = tempfile.mkdtemp(prefix="dub_output_")
 
-    out_video = transcript = srt = ref_wav_path = None
+    out_video = transcript = srt = None
+    speaker_ref_wavs: dict[str, str] = {}
     timing_df = backtrans_df = timing_csv = backtrans_csv = None
 
     try:
@@ -258,43 +259,60 @@ def generate_redub(
             if isinstance(item, str):
                 current_log = log(item)
                 yield (current_log, None, None, None, video_path,
-                       None, gr.update(visible=False), "",
+                       {}, gr.update(visible=False), gr.update(visible=False, choices=[]), "",
                        None, None, None, None)
             elif isinstance(item, dict):
                 out_video = item.get("video")
                 transcript = item.get("transcript")
                 srt = item.get("srt")
-                ref_wav_path = item.get("ref_wav")
+                speaker_ref_wavs = item.get("speaker_ref_wavs") or {}
                 timing_df = item.get("timing_df")
                 timing_csv = item.get("timing_csv")
                 backtrans_df = item.get("backtrans_df")
                 backtrans_csv = item.get("backtrans_csv")
 
         final_log = log("Done! Redubbed video is ready.")
-        can_save = voice_mode == "clone" and ref_wav_path is not None
+        can_save = voice_mode == "clone" and bool(speaker_ref_wavs)
+        speakers = sorted(speaker_ref_wavs.keys())
+        multi = len(speakers) > 1
+        speaker_dd_update = gr.update(
+            choices=speakers,
+            value=speakers[0] if speakers else None,
+            visible=multi,
+        )
         yield (final_log, out_video, transcript, srt, video_path,
-               ref_wav_path, gr.update(visible=can_save), "",
+               speaker_ref_wavs, gr.update(visible=can_save), speaker_dd_update, "",
                timing_df, backtrans_df, timing_csv, backtrans_csv)
 
     except Exception as e:
         tb = traceback.format_exc()
         error_log = log(f"Error: {e}\n\n{tb}")
         yield (error_log, None, None, None, video_path,
-               None, gr.update(visible=False), "",
+               {}, gr.update(visible=False), gr.update(visible=False, choices=[]), "",
                None, None, None, None)
 
 
 # ── Save voice handler ────────────────────────────────────────────────────────
 
-def handle_save_voice(name: str, ref_wav_path: str | None):
-    """Save the cloned reference WAV under a user-chosen name."""
+def handle_save_voice(name: str, speaker_id: str | None, speaker_refs: dict):
+    """Save a cloned reference WAV under a user-chosen name."""
     name = (name or "").strip()
     if not name:
         return gr.update(), "Please enter a name for the voice."
-    if not ref_wav_path or not Path(ref_wav_path).exists():
+    if not speaker_refs:
         return gr.update(), "No reference audio available to save."
+
+    # Pick the requested speaker's WAV, or the first available one
+    wav_path: str | None = None
+    if speaker_id and speaker_id in speaker_refs:
+        wav_path = speaker_refs[speaker_id]
+    else:
+        wav_path = next(iter(speaker_refs.values()), None)
+
+    if not wav_path or not Path(wav_path).exists():
+        return gr.update(), "Reference audio file not found on disk."
     try:
-        save_cloned_voice(name, ref_wav_path)
+        save_cloned_voice(name, wav_path)
         voices = load_saved_voices()
         return gr.update(choices=list(voices.keys()), value=name), f"Voice **{name}** saved!"
     except Exception as e:
@@ -524,14 +542,22 @@ def build_ui() -> gr.Blocks:
                     backtrans_csv_dl = gr.File(label="back_translation.csv", interactive=False)
 
         # ── Save cloned voice panel (shown after successful clone run) ────────
-        ref_wav_state = gr.State(value=None)
+        speaker_refs_state = gr.State(value={})  # {speaker_id: wav_path}
 
         with gr.Group(visible=False) as save_voice_group:
-            gr.Markdown("---\n**Save this cloned voice for future use:**")
+            gr.Markdown("---\n**Save cloned voice(s) for future use:**")
+            save_speaker_dd = gr.Dropdown(
+                label="Speaker to save",
+                choices=[],
+                value=None,
+                visible=False,
+                interactive=True,
+                info="Multiple speakers detected — select which one to save.",
+            )
             with gr.Row():
                 save_name_input = gr.Textbox(
                     label="Voice name",
-                    placeholder="e.g. Speaker A — English",
+                    placeholder="e.g. Male lead — English",
                     scale=3,
                 )
                 save_btn = gr.Button("Save voice", variant="secondary", scale=1)
@@ -601,7 +627,7 @@ def build_ui() -> gr.Blocks:
             ],
             outputs=[
                 log_box, redubbed_player, transcript_dl, srt_dl, original_player,
-                ref_wav_state, save_voice_group, save_status,
+                speaker_refs_state, save_voice_group, save_speaker_dd, save_status,
                 timing_table, backtrans_table, timing_csv_dl, backtrans_csv_dl,
             ],
         )
@@ -609,7 +635,7 @@ def build_ui() -> gr.Blocks:
         # Save voice button
         save_btn.click(
             fn=handle_save_voice,
-            inputs=[save_name_input, ref_wav_state],
+            inputs=[save_name_input, save_speaker_dd, speaker_refs_state],
             outputs=[saved_voice_dd, save_status],
         )
 
@@ -620,7 +646,7 @@ if __name__ == "__main__":
     demo = build_ui()
     demo.queue()
     demo.launch(
-        server_name="0.0.0.0",
+        server_name=os.environ.get("HOST", "127.0.0.1"),
         server_port=int(os.environ.get("PORT", 7860)),
         share=False,
         theme=gr.themes.Soft(),

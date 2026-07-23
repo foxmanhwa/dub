@@ -8,6 +8,7 @@ echo "======================================================"
 echo
 
 OS=$(uname -s)
+ARCH=$(uname -m)
 
 # ── 1. Python version check ──────────────────────────────────────────────────
 
@@ -76,19 +77,106 @@ echo
 # shellcheck source=/dev/null
 source .venv/bin/activate
 
-# ── 4. PyTorch -- GPU or CPU ─────────────────────────────────────────────────
+# ── 4. PyTorch + optional Ollama setup ───────────────────────────────────────
+
+GPU_FOUND=0
+USE_OLLAMA=n
+OLLAMA_READY=0
 
 echo "  Detecting GPU..."
 
+_install_ollama_and_model() {
+    # Install Ollama binary if needed
+    if command -v ollama &>/dev/null; then
+        echo "  [OK] Ollama already installed."
+        OLLAMA_READY=1
+    else
+        echo "  Installing Ollama..."
+        if [ "$OS" = "Darwin" ]; then
+            if command -v brew &>/dev/null; then
+                brew install ollama
+                OLLAMA_READY=1
+            else
+                echo "  Homebrew not found. Install Ollama manually:"
+                echo "    https://ollama.com/download"
+                echo "  Then run:  ollama pull qwen2.5:14b"
+                OLLAMA_READY=0
+                return
+            fi
+        else
+            # Linux: official install script
+            if command -v curl &>/dev/null; then
+                curl -fsSL https://ollama.com/install.sh | sh
+                OLLAMA_READY=1
+            else
+                echo "  curl not found. Install Ollama manually:"
+                echo "    https://ollama.com/download"
+                OLLAMA_READY=0
+                return
+            fi
+        fi
+        echo "  [OK] Ollama installed."
+    fi
+}
+
 if [ "$OS" = "Darwin" ]; then
-    # macOS: no CUDA; MPS (Apple Silicon) or CPU handled transparently by torch
     echo "  [INFO] macOS detected. Installing standard PyTorch (MPS-enabled for Apple Silicon)."
     echo
     pip install torch torchaudio
+
+    # Apple Silicon: Metal GPU can run Ollama models efficiently
+    if [ "$ARCH" = "arm64" ]; then
+        echo
+        echo "  --------------------------------------------------------"
+        echo "   LOCAL TRANSLATION (optional)"
+        echo "  --------------------------------------------------------"
+        echo "   Apple Silicon detected. Ollama runs large models via"
+        echo "   Metal, keeping translations private and offline."
+        echo
+        echo "   Model: qwen2.5:14b  (~9 GB one-time download)"
+        echo "   Alternatively, skip this and use Groq (cloud, free)."
+        echo "  --------------------------------------------------------"
+        echo
+        read -rp "  Use local Ollama translation? (y/n): " USE_OLLAMA
+        USE_OLLAMA="${USE_OLLAMA:-n}"
+        echo
+        if [[ "$USE_OLLAMA" =~ ^[Yy]$ ]]; then
+            USE_OLLAMA=y
+            GPU_FOUND=1
+            _install_ollama_and_model
+        else
+            USE_OLLAMA=n
+        fi
+    fi
+
 elif command -v nvidia-smi &>/dev/null; then
+    GPU_FOUND=1
     echo "  [OK] NVIDIA GPU detected! Installing CUDA-enabled PyTorch (CUDA 12.1)..."
     echo
     pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+    echo
+    echo "  --------------------------------------------------------"
+    echo "   LOCAL TRANSLATION (optional)"
+    echo "  --------------------------------------------------------"
+    echo "   Your GPU can run a local translation model via Ollama,"
+    echo "   keeping translations private and working fully offline."
+    echo
+    echo "   Model: qwen2.5:14b  (~9 GB one-time download)"
+    echo "   Requires ~10 GB VRAM. Works great on RTX 3060 12 GB+."
+    echo
+    echo "   Alternatively, skip this and use Groq (cloud, free)."
+    echo "  --------------------------------------------------------"
+    echo
+    read -rp "  Use local Ollama translation? (y/n): " USE_OLLAMA
+    USE_OLLAMA="${USE_OLLAMA:-n}"
+    echo
+    if [[ "$USE_OLLAMA" =~ ^[Yy]$ ]]; then
+        USE_OLLAMA=y
+        _install_ollama_and_model
+    else
+        USE_OLLAMA=n
+    fi
+
 else
     echo "  [INFO] No NVIDIA GPU detected."
     echo "         Installing CPU-only PyTorch. Demucs stem separation will be slower."
@@ -117,20 +205,26 @@ if [ -f .env ]; then
     echo "         Edit .env manually to update your keys."
     echo
 else
-    echo "  Two keys are required; one is optional."
-    echo
     echo "  [1] FISH_AUDIO_API_KEY  (required)"
     echo "      Handles transcription and voice-cloned TTS."
-    echo "      Sign up at: https://fish.audio  →  Dashboard → API Keys"
+    echo "      Sign up at: https://fish.audio  ->  Dashboard -> API Keys"
     echo
     read -rp "  Enter Fish Audio API key: " FISH_KEY
     echo
 
-    echo "  [2] GROQ_API_KEY  (required for translation)"
-    echo "      Free tier, no billing required."
-    echo "      Get one at: https://console.groq.com"
-    echo
-    read -rp "  Enter Groq API key: " GROQ_KEY
+    if [[ "$USE_OLLAMA" =~ ^[Yy]$ ]]; then
+        echo "  [2] GROQ_API_KEY  (optional -- cloud fallback if Ollama is unavailable)"
+        echo "      Leave blank to use Ollama only."
+        echo "      Get one at: https://console.groq.com"
+        echo
+        read -rp "  Groq API key (Enter to skip): " GROQ_KEY
+    else
+        echo "  [2] GROQ_API_KEY  (required for translation)"
+        echo "      Free tier, no billing required."
+        echo "      Get one at: https://console.groq.com"
+        echo
+        read -rp "  Enter Groq API key: " GROQ_KEY
+    fi
     echo
 
     echo "  [3] HF_TOKEN  (optional)"
@@ -146,12 +240,34 @@ else
 
     echo "  Writing .env..."
 
-    cat > .env <<EOF
+    if [[ "$USE_OLLAMA" =~ ^[Yy]$ ]]; then
+        cat > .env <<EOF
+FISH_AUDIO_API_KEY=${FISH_KEY}
+
+# Translation -- local Ollama (GPU-accelerated, offline)
+TRANSLATION_BACKEND=ollama
+OLLAMA_MODEL=qwen2.5:14b
+EOF
+        if [ -n "${GROQ_KEY:-}" ]; then
+            cat >> .env <<EOF
+
+# Cloud fallback -- set TRANSLATION_BACKEND=groq to use instead of Ollama
+GROQ_API_KEY=${GROQ_KEY}
+EOF
+        else
+            echo "# GROQ_API_KEY=  (optional cloud fallback -- set TRANSLATION_BACKEND=groq to use)" >> .env
+        fi
+    else
+        cat > .env <<EOF
 FISH_AUDIO_API_KEY=${FISH_KEY}
 
 # Translation -- Groq (default), Gemini, or Ollama
 GROQ_API_KEY=${GROQ_KEY}
 # GEMINI_API_KEY=your_gemini_api_key_here
+EOF
+    fi
+
+    cat >> .env <<EOF
 
 # Phase B -- multi-speaker diarization (optional)
 EOF
@@ -166,7 +282,42 @@ EOF
     echo
 fi
 
-# ── 7. Launch ────────────────────────────────────────────────────────────────
+# ── 7. Pull Ollama model (after keys so user can walk away) ──────────────────
+
+if [[ "$USE_OLLAMA" =~ ^[Yy]$ ]] && [ "$OLLAMA_READY" = "1" ]; then
+    echo "======================================================"
+    echo "  Pulling translation model"
+    echo "======================================================"
+    echo
+    echo "  Downloading qwen2.5:14b (~9 GB) -- this may take 10-30 minutes."
+    echo "  You can step away; the app will launch automatically when done."
+    echo
+
+    # On Linux, start the Ollama service if it isn't running yet
+    if [ "$OS" = "Linux" ]; then
+        if command -v systemctl &>/dev/null && systemctl is-enabled ollama &>/dev/null 2>&1; then
+            sudo systemctl start ollama 2>/dev/null || true
+        elif ! pgrep -x ollama &>/dev/null; then
+            ollama serve &>/dev/null &
+            sleep 3
+        fi
+    fi
+
+    if ollama pull qwen2.5:14b; then
+        echo
+        echo "  [OK] qwen2.5:14b ready."
+        echo
+    else
+        echo
+        echo "  WARNING: Model pull failed. To retry:"
+        echo "    ollama pull qwen2.5:14b"
+        echo "  Then start the app:"
+        echo "    python app.py"
+        echo
+    fi
+fi
+
+# ── 8. Launch ────────────────────────────────────────────────────────────────
 
 echo "======================================================"
 echo "  Setup complete!"

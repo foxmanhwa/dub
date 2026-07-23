@@ -57,6 +57,103 @@ def extract_reference_clip(
     return output_path
 
 
+def extract_speaker_reference_clips(
+    audio_path: str,
+    diarization_segments: list[dict],
+    work_dir: str,
+    target_duration: float = 12.0,
+    overlap_regions: list[dict] | None = None,
+) -> dict[str, tuple[str, float]]:
+    """
+    Build a per-speaker voice reference WAV from diarization segments.
+
+    For each speaker, picks their longest non-overlapping segments and
+    concatenates until reaching target_duration (or as close as possible).
+
+    Returns {speaker_id: (wav_path, actual_duration_seconds)}.
+    Speakers with very little audio are still included; callers can check
+    the duration to decide whether quality is acceptable.
+    """
+    work = Path(work_dir)
+    work.mkdir(parents=True, exist_ok=True)
+
+    # Build a set of overlap windows to exclude (mixed audio = bad reference)
+    overlap_spans: list[tuple[float, float]] = []
+    for r in (overlap_regions or []):
+        overlap_spans.append((r["start"], r["end"]))
+
+    def _in_overlap(start: float, end: float) -> bool:
+        for os, oe in overlap_spans:
+            if start < oe and end > os:
+                return True
+        return False
+
+    # Group diarization segments by speaker
+    by_speaker: dict[str, list[dict]] = {}
+    for seg in diarization_segments:
+        spk = seg.get("speaker", "SPEAKER_00")
+        dur = seg["end"] - seg["start"]
+        if dur < 0.5 or _in_overlap(seg["start"], seg["end"]):
+            continue
+        by_speaker.setdefault(spk, []).append(seg)
+
+    result: dict[str, tuple[str, float]] = {}
+
+    for speaker, segs in by_speaker.items():
+        # Longest segments first — maximum clean, uninterrupted speech
+        segs_sorted = sorted(segs, key=lambda s: s["end"] - s["start"], reverse=True)
+
+        selected: list[dict] = []
+        accumulated = 0.0
+        for seg in segs_sorted:
+            selected.append(seg)
+            accumulated += seg["end"] - seg["start"]
+            if accumulated >= target_duration:
+                break
+
+        if not selected:
+            continue
+
+        # Extract each chunk to a temp WAV
+        chunk_paths: list[str] = []
+        for ci, seg in enumerate(selected):
+            chunk_path = str(work / f"{speaker}_chunk_{ci:02d}.wav")
+            seg_dur = seg["end"] - seg["start"]
+            _run([
+                "ffmpeg", "-y", "-i", audio_path,
+                "-ss", f"{seg['start']:.3f}", "-t", f"{seg_dur:.3f}",
+                "-ar", "44100", "-ac", "1",
+                chunk_path,
+            ])
+            chunk_paths.append(chunk_path)
+
+        ref_path = str(work / f"{speaker}_reference.wav")
+        if len(chunk_paths) == 1:
+            os.replace(chunk_paths[0], ref_path)
+        else:
+            concat_list = str(work / f"{speaker}_concat_list.txt")
+            with open(concat_list, "w") as f:
+                for p in chunk_paths:
+                    f.write(f"file '{p}'\n")
+            _run([
+                "ffmpeg", "-y",
+                "-f", "concat", "-safe", "0",
+                "-i", concat_list,
+                "-ar", "44100", "-ac", "1",
+                ref_path,
+            ])
+            for p in chunk_paths:
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+
+        actual_dur = min(accumulated, target_duration)
+        result[speaker] = (ref_path, actual_dur)
+
+    return result
+
+
 def mux_audio_into_video(
     video_path: str,
     audio_path: str,

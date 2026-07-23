@@ -14,12 +14,14 @@ bash setup.sh    # Mac / Linux
 
 The script installs everything, detects your GPU, prompts for API keys, and launches the app. That's it.
 
+**GPU users (NVIDIA 10 GB+ VRAM or Apple Silicon):** the script will offer to install [Ollama](https://ollama.com) and pull `qwen2.5:14b` for fully local, private, offline-capable translation — no cloud API key needed for translation. Just answer `y` at the prompt.
+
 ---
 
 A Gradio web app that redubs single-speaker videos into a target language using:
 - **Fish Audio** — ASR transcription (with timestamps) + TTS with instant voice cloning
-- **Gemini** — fast, free-tier translation via Google AI Studio (default)
-- **Ollama** — fully-local, offline translation fallback (optional)
+- **Groq** — fast, free-tier translation (default; Gemini and Ollama are fallbacks)
+- **Ollama** — fully-local, offline translation (optional)
 - **Demucs** — vocal/music stem separation to preserve background music
 - **pyannote** — multi-speaker diarization (Phase B)
 
@@ -29,7 +31,7 @@ A Gradio web app that redubs single-speaker videos into a target language using:
 Video → FFmpeg extract audio
       → [optional] Demucs — split vocals + background music
       → Fish Audio ASR (vocals stem, with timestamps)
-      → Gemini / Ollama translation (duration-conscious, chunked)
+      → Groq / Gemini / Ollama translation (duration-conscious, chunked)
       → Fish Audio TTS (voice-cloned, per segment)
       → FFmpeg time-fit each clip → reassemble dubbed audio
       → [optional] FFmpeg mix dubbed vocals + original music
@@ -105,28 +107,49 @@ Open [http://localhost:7860](http://localhost:7860) in your browser.
 | Env var | Default | Description |
 |---|---|---|
 | `FISH_AUDIO_API_KEY` | — | **Required.** Fish Audio API key |
-| `GEMINI_API_KEY` | — | Gemini API key (free). When set, Gemini is the translation backend. |
-| `GEMINI_MODEL` | `gemini-2.0-flash` | Gemini model. `gemini-2.5-flash` for higher quality. |
-| `TRANSLATION_BACKEND` | auto | `gemini` or `ollama`. Auto-selects Gemini if `GEMINI_API_KEY` is set. |
-| `OLLAMA_MODEL` | `llama3.2:latest` | Ollama model (only used when `TRANSLATION_BACKEND=ollama`). |
+| `GROQ_API_KEY` | — | Groq API key (free tier). **Auto-selected as default translation backend when set.** |
+| `GEMINI_API_KEY` | — | Gemini API key (free). Used when `GROQ_API_KEY` is absent. |
+| `GROQ_MODEL` | `llama-3.3-70b-versatile` | Groq model override. |
+| `GEMINI_MODEL` | `gemini-2.0-flash` | Gemini model override. `gemini-2.5-flash` for higher quality. |
+| `TRANSLATION_BACKEND` | auto | Force a backend: `groq`, `gemini`, or `ollama`. Auto-selects Groq → Gemini → Ollama by which key is present. |
+| `OLLAMA_MODEL` | `llama3.2:latest` | Ollama model (only used when backend is `ollama`). |
 | `HF_TOKEN` | — | Hugging Face token for pyannote diarization (Phase B). |
+| `HOST` | `127.0.0.1` | Server bind address. Set to `0.0.0.0` to expose on the local network. |
 | `PORT` | `7860` | Port to run the Gradio server on. |
 
 ## Translation backends
 
-**Gemini (default)** — recommended:
-- Fast (~2–5 seconds per chunk vs 60–120 s cold-start with Ollama on CPU)
-- Free tier: 15 requests/minute, 1 M tokens/minute — ample for typical videos
-- No local GPU or model download needed
+**Groq (default)** — recommended:
+- Fast (~1–3 s per chunk), generous free tier, no billing required
+- Get a free key at [console.groq.com](https://console.groq.com)
+
+**Gemini (fallback when no Groq key)** — also free:
+- Free tier: 15 requests/minute, 1 M tokens/day
 - Get a free key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey)
 
-**Ollama (fallback)** — fully local, no API key:
+**Ollama — local, no API key:**
+
+*GPU path (recommended for NVIDIA 10 GB+ VRAM or Apple Silicon M-series):*
 ```bash
-# Install from https://ollama.com, then:
-ollama pull llama3.2
+ollama pull qwen2.5:14b   # ~9 GB download; strong multilingual model
 ```
-Set `TRANSLATION_BACKEND=ollama` in `.env` to use it. Cold-start on CPU takes 60–120 s
-to load the model; subsequent chunks are faster once it's in RAM.
+```env
+TRANSLATION_BACKEND=ollama
+OLLAMA_MODEL=qwen2.5:14b
+```
+The setup script handles this automatically when a capable GPU is detected.
+
+*CPU fallback (slower, lower quality):*
+```bash
+ollama pull llama3.2      # ~2 GB; workable on CPU
+```
+```env
+TRANSLATION_BACKEND=ollama
+OLLAMA_MODEL=llama3.2:latest
+```
+CPU cold-start takes 60–120 s to load the model; subsequent chunks are faster once it's in RAM.
+
+Backend auto-selection order: `TRANSLATION_BACKEND` env var (explicit) → `GROQ_API_KEY` present → `GEMINI_API_KEY` present → Ollama.
 
 ## Project structure
 
@@ -135,7 +158,7 @@ dub/
 ├── app.py                        # Gradio UI entry point
 ├── modules/
 │   ├── asr.py                    # Fish Audio ASR transcription
-│   ├── translation.py            # Gemini / Ollama translation
+│   ├── translation.py            # Groq / Gemini / Ollama translation
 │   ├── tts.py                    # Fish Audio TTS + voice cloning
 │   ├── audio_assembly.py         # Time-fitting + audio reassembly (FFmpeg)
 │   ├── music_separation.py       # Demucs vocal/music stem separation

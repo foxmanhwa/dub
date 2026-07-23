@@ -1,10 +1,12 @@
 """
-LLM-based translation — Gemini (default) or Ollama (fallback).
+LLM-based translation — Groq (default), Gemini, or Ollama fallback.
 
 Backend selection (in priority order):
+  TRANSLATION_BACKEND=groq     force Groq (requires GROQ_API_KEY)
   TRANSLATION_BACKEND=gemini   force Gemini (requires GEMINI_API_KEY)
   TRANSLATION_BACKEND=ollama   force Ollama (requires ollama running locally)
-  [unset]                      auto: Gemini if GEMINI_API_KEY is present, else Ollama
+  [unset]                      auto: Groq if GROQ_API_KEY set, else Gemini if
+                                     GEMINI_API_KEY set, else Ollama
 """
 
 import os
@@ -236,13 +238,38 @@ def translate_segments(
     return result
 
 
+# ISO 639-1 code → display name used in back-translation prompts
+_LANG_NAMES: dict[str, str] = {
+    "en": "English", "es": "Spanish", "zh": "Chinese (Mandarin)",
+    "fr": "French", "de": "German", "ja": "Japanese", "ko": "Korean",
+    "pt": "Portuguese", "ru": "Russian", "ar": "Arabic", "hi": "Hindi",
+    "it": "Italian", "nl": "Dutch", "pl": "Polish", "tr": "Turkish",
+    "vi": "Vietnamese", "th": "Thai", "id": "Indonesian",
+}
+
+
 def back_translate_segments(
     segments: list[dict],
     model: str | None = None,
+    source_language: str | None = None,
 ) -> list[dict]:
-    """Back-translate each segment's translated_text to English for QA."""
+    """
+    Back-translate each segment's translated_text back to the source language for QA.
+
+    source_language: ISO 639-1 code (e.g. "en", "es") or None/"auto".
+    When None/"auto", defaults to English so the result is still useful for
+    English-source videos; a note is added to each segment.
+
+    The back-translated text is compared against seg["text"] (the original
+    source transcript), so the comparison is always apples-to-apples only when
+    the back-translation target matches the source language.
+    """
     if model is None:
         model = os.environ.get("OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL)
+
+    known_source = source_language and source_language not in ("auto", "")
+    target_lang_name = _LANG_NAMES.get(source_language or "", "English") if known_source else "English"
+    lang_is_known = bool(known_source)
 
     result = [dict(seg) for seg in segments]
     to_process = [
@@ -251,9 +278,9 @@ def back_translate_segments(
     ]
 
     system_prompt = (
-        "Translate the following text to English. "
+        f"Translate the following text to {target_lang_name}. "
         "Return each line with the same [N] prefix as in the input. "
-        "No explanations, notes, or commentary — only the English translations.\n"
+        f"No explanations, notes, or commentary — only the {target_lang_name} translations.\n"
         "Example:\n[1] Hello\n[2] How are you?"
     )
 
@@ -273,7 +300,7 @@ def back_translate_segments(
             orig_text = result[orig_idx].get("text", "")
             sim = _word_similarity(orig_text, back_text) if back_text else 0.0
             result[orig_idx]["back_translated_text"] = back_text
-            result[orig_idx]["back_trans_similarity"] = round(sim, 3)
+            result[orig_idx]["back_trans_similarity"] = round(sim, 3) if lang_is_known else None
 
     for seg in result:
         if "back_translated_text" not in seg:
