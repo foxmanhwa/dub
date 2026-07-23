@@ -5,11 +5,10 @@ and flags segments where the stretch/compress ratio is outside the safe range.
 
 import difflib
 
-from .audio_assembly import get_duration
+from .audio_assembly import get_duration, SAFE_RATIO_MIN, SAFE_RATIO_MAX
 
-
-RATIO_WARN_LOW = 0.7   # below this → TTS is much shorter, will be slowed down
-RATIO_WARN_HIGH = 1.4  # above this → TTS is much longer, will be sped up
+RATIO_WARN_LOW = SAFE_RATIO_MIN   # segments outside this band needed clamped stretch
+RATIO_WARN_HIGH = SAFE_RATIO_MAX
 
 
 def build_timing_report(segments: list[dict]) -> list[dict]:
@@ -34,6 +33,8 @@ def build_timing_report(segments: list[dict]) -> list[dict]:
         if tts_dur is not None and orig_dur > 0:
             ratio = tts_dur / orig_dur
 
+        fit_retries = seg.get("fit_retries", 0)
+
         if seg.get("is_overlap"):
             n_streams = len(seg.get("speaker_data") or [])
             status = f"⚡ overlap ({n_streams} streams)"
@@ -50,6 +51,9 @@ def build_timing_report(segments: list[dict]) -> list[dict]:
         else:
             status = "ok"
 
+        if fit_retries > 0:
+            status += f" (↻{fit_retries})"
+
         rows.append({
             "seg": i,
             "start": seg["start"],
@@ -58,6 +62,7 @@ def build_timing_report(segments: list[dict]) -> list[dict]:
             "tts_dur": tts_dur,
             "ratio": ratio,
             "status": status,
+            "fit_retries": fit_retries,
             "original_text": seg.get("text", ""),
             "translated_text": seg.get("translated_text", ""),
         })
@@ -77,6 +82,7 @@ def timing_report_to_df(rows: list[dict]):
             "Orig (s)": f"{r['orig_dur']:.2f}",
             "TTS raw (s)": f"{r['tts_dur']:.2f}" if r["tts_dur"] is not None else "—",
             "Ratio": f"{r['ratio']:.2f}" if r["ratio"] is not None else "—",
+            "Retries": r["fit_retries"] if r.get("fit_retries", 0) > 0 else "",
             "Status": r["status"],
         })
     return pd.DataFrame(display)

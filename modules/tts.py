@@ -7,6 +7,8 @@ from pathlib import Path
 import httpx
 import msgpack
 
+from .audio_assembly import get_duration as _get_audio_duration, SAFE_RATIO_MIN, SAFE_RATIO_MAX
+
 
 FISH_TTS_URL = "https://api.fish.audio/v1/tts"
 _RETRY_DELAYS = [2, 5, 10]  # seconds between retries
@@ -89,6 +91,8 @@ def synthesize_segments(
     speaker_references: "dict[str, tuple[bytes | None, str, str | None]] | None" = None,
     output_dir: str = "output",
     progress_cb=None,
+    translate_retry_fn=None,
+    max_fit_retries: int = 2,
 ) -> list[dict]:
     """
     Synthesize TTS for each translated segment.
@@ -101,7 +105,13 @@ def synthesize_segments(
       - (None, "", voice_id)     → Fish Audio library voice fallback for this speaker
     Falls back to the global reference when a segment's speaker is absent from the dict.
 
-    Adds "tts_path" key to each segment.  Segments without translated_text get tts_path=None.
+    translate_retry_fn: optional callable(translated_text, original_text, target_secs, direction) -> str.
+      When provided, segments whose TTS duration falls outside [SAFE_RATIO_MIN, SAFE_RATIO_MAX]
+      relative to their original slot are retranslated and re-synthesized up to max_fit_retries times.
+      direction is "shorter" (TTS ran over) or "longer" (TTS was too short).
+
+    Adds "tts_path" and "fit_retries" keys to each segment.
+    Segments without translated_text get tts_path=None.
     progress_cb: optional callable(done, total).
     """
     out = Path(output_dir)
@@ -146,20 +156,69 @@ def synthesize_segments(
                 print(f"[TTS] seg {i}: speaker {speaker!r} not in speaker_references — using global ref")
 
         try:
+            current_text = text
             audio = synthesize(
-                text=text,
+                text=current_text,
                 reference_audio_bytes=seg_ref_bytes,
                 reference_text=seg_ref_text,
                 reference_id=seg_ref_id,
             )
             path = out / f"seg_{i:04d}.mp3"
             path.write_bytes(audio)
+
+            # Iterative fit: retranslate if TTS duration is outside safe stretch bounds
+            fit_retries = 0
+            if translate_retry_fn is not None and max_fit_retries > 0:
+                orig_dur = seg.get("end", 0.0) - seg.get("start", 0.0)
+                if orig_dur > 0:
+                    for _ in range(max_fit_retries):
+                        try:
+                            tts_dur = _get_audio_duration(str(path))
+                        except Exception:
+                            break
+                        ratio = tts_dur / orig_dur
+                        if SAFE_RATIO_MIN <= ratio <= SAFE_RATIO_MAX:
+                            break
+                        direction = "shorter" if ratio > SAFE_RATIO_MAX else "longer"
+                        print(
+                            f"[TTS fit] seg {i}: ratio {ratio:.2f} — "
+                            f"requesting {direction} retranslation"
+                        )
+                        new_text = translate_retry_fn(
+                            current_text, seg.get("text", ""), orig_dur, direction
+                        )
+                        if not new_text or new_text == current_text:
+                            print(f"[TTS fit] seg {i}: retranslation unchanged — stopping")
+                            break
+                        new_audio = synthesize(
+                            text=new_text,
+                            reference_audio_bytes=seg_ref_bytes,
+                            reference_text=seg_ref_text,
+                            reference_id=seg_ref_id,
+                        )
+                        path.write_bytes(new_audio)
+                        current_text = new_text
+                        fit_retries += 1
+                        try:
+                            new_dur = _get_audio_duration(str(path))
+                            print(
+                                f"[TTS fit] seg {i}: retry {fit_retries} → "
+                                f"ratio {new_dur / orig_dur:.2f}"
+                            )
+                        except Exception:
+                            pass
+
             done += 1
             if progress_cb:
                 progress_cb(done, total)
-            result.append({**seg, "tts_path": str(path)})
+            result.append({
+                **seg,
+                "tts_path": str(path),
+                "translated_text": current_text,
+                "fit_retries": fit_retries,
+            })
         except Exception as exc:
             print(f"[TTS error] seg {i}: {exc!r}  text={text!r}")
-            result.append({**seg, "tts_path": None, "tts_error": str(exc)})
+            result.append({**seg, "tts_path": None, "tts_error": str(exc), "fit_retries": 0})
 
     return result
