@@ -219,5 +219,8 @@ __marimo__/
 
 # Project output
 output/
-*.mp4
-*.srt
+output/*.mp4
+output/*.srt
+
+# Machine-specific Claude Code settings (contains local absolute paths)
+.claude/settings.local.json

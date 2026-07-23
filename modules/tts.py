@@ -86,12 +86,20 @@ def synthesize_segments(
     reference_audio_bytes: bytes | None = None,
     reference_text: str = "",
     reference_id: str | None = None,
+    speaker_references: "dict[str, tuple[bytes, str]] | None" = None,
     output_dir: str = "output",
     progress_cb=None,
 ) -> list[dict]:
     """
     Synthesize TTS for each translated segment.
-    Supply either reference_audio_bytes (clone) or reference_id (library/saved model).
+
+    Supply either reference_audio_bytes (clone) or reference_id (library/saved model)
+    as the global fallback reference.
+
+    speaker_references: optional dict {speaker_id: (audio_bytes, ref_text)}.
+    When provided, each segment's "speaker" field is used to look up its own
+    reference clip; falls back to the global reference if the speaker is absent.
+
     Adds "tts_path" key to each segment.  Segments without translated_text get tts_path=None.
     progress_cb: optional callable(done, total).
     """
@@ -115,11 +123,21 @@ def synthesize_segments(
             result.append({**seg, "tts_path": None, "tts_error": f"empty translation — {reason}"})
             continue
 
+        # Per-speaker reference lookup
+        seg_ref_bytes = reference_audio_bytes
+        seg_ref_text = reference_text
+        if speaker_references:
+            speaker = seg.get("speaker")
+            if speaker and speaker in speaker_references:
+                seg_ref_bytes, seg_ref_text = speaker_references[speaker]
+            elif speaker:
+                print(f"[TTS] seg {i}: speaker {speaker!r} not in speaker_references — using global ref")
+
         try:
             audio = synthesize(
                 text=text,
-                reference_audio_bytes=reference_audio_bytes,
-                reference_text=reference_text,
+                reference_audio_bytes=seg_ref_bytes,
+                reference_text=seg_ref_text,
                 reference_id=reference_id,
             )
             path = out / f"seg_{i:04d}.mp3"
