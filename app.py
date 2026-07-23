@@ -255,8 +255,8 @@ def generate_redub(
             run_backtranslation=run_backtranslation,
             handle_overlaps=handle_overlaps,
             preserve_music=preserve_music,
-            content_context=content_context.strip() or None,
-            fallback_voice_id=fallback_voice_id.strip() or None,
+            content_context=(content_context or "").strip() or None,
+            fallback_voice_id=(fallback_voice_id or "").strip() or None,
             min_ref_duration=min_ref_duration,
         )
         for item in gen:
