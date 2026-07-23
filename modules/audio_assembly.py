@@ -41,19 +41,40 @@ def extract_audio(video_path: str, output_path: str, sample_rate: int = 44100) -
     return output_path
 
 
+def normalize_reference_clip(input_path: str, output_path: str) -> str:
+    """
+    Normalize loudness to −16 LUFS (EBU R128 single-pass) and true peak to −1.5 dBFS.
+    Vocals stems from Demucs can have inconsistent gain across segments; levelling before
+    cloning gives Fish Audio a consistent signal and improves clone quality.
+    """
+    _run([
+        "ffmpeg", "-y", "-i", input_path,
+        "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
+        "-ar", "44100", "-ac", "1",
+        output_path,
+    ])
+    return output_path
+
+
 def extract_reference_clip(
     audio_path: str,
     output_path: str,
     start: float = 0.0,
     duration: float = 12.0,
 ) -> str:
-    """Extract a short clip from audio_path for voice cloning."""
+    """Extract a short clip from audio_path for voice cloning, normalized to -16 LUFS."""
+    raw = output_path + ".raw.wav"
     _run([
         "ffmpeg", "-y", "-i", audio_path,
         "-ss", f"{start:.3f}", "-t", f"{duration:.3f}",
         "-ar", "44100", "-ac", "1",
-        output_path,
+        raw,
     ])
+    try:
+        normalize_reference_clip(raw, output_path)
+        os.remove(raw)
+    except Exception:
+        os.replace(raw, output_path)
     return output_path
 
 
@@ -147,6 +168,14 @@ def extract_speaker_reference_clips(
                     os.remove(p)
                 except OSError:
                     pass
+
+        # Normalize loudness in-place — consistent level across concatenated chunks
+        norm_path = str(work / f"{speaker}_reference_norm.wav")
+        try:
+            normalize_reference_clip(ref_path, norm_path)
+            os.replace(norm_path, ref_path)
+        except Exception:
+            pass  # keep un-normalized if loudnorm fails (e.g. near-silent clip)
 
         actual_dur = min(accumulated, target_duration)
         result[speaker] = (ref_path, actual_dur)
