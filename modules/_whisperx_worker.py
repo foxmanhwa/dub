@@ -133,7 +133,11 @@ def _run(audio_path: str, result_path: str, language: str | None) -> None:
             diarize_model = whisperx.DiarizationPipeline(
                 use_auth_token=hf_token, device=device
             )
-            diarize_segs = diarize_model(audio)
+            # Pass a pre-converted tensor dict to bypass any file-path audio
+            # loading inside pyannote (same fix as _diarization_worker.py).
+            # audio is numpy float32 [samples] at 16 kHz from whisperx.load_audio().
+            _audio_tensor = torch.from_numpy(audio).unsqueeze(0)  # [1, samples]
+            diarize_segs = diarize_model({"waveform": _audio_tensor, "sample_rate": 16000})
             result = whisperx.assign_word_speakers(diarize_segs, result)
             speakers_assigned = True
             _log("[whisperx] Speaker assignment complete.")
