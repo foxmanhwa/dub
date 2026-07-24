@@ -71,7 +71,8 @@
       "Bash(powershell *)",
       "Bash(.venv\\\\Scripts\\\\python.exe app.py)",
       "Read(//tmp/**)",
-      "PowerShell(taskkill *)"
+      "PowerShell(taskkill *)",
+      "Bash(echo \"exit: $?\")"
     ]
   }
 }
