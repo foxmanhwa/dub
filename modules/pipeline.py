@@ -34,6 +34,46 @@ from .timing_report import build_timing_report, timing_report_to_df, backtrans_t
 
 
 REFERENCE_CLIP_DURATION = 12.0
+
+
+def _detect_overlaps_from_segments(
+    dia_segments: list[dict], min_duration: float = 0.3
+) -> list[dict]:
+    """Detect time windows where two different speakers are active simultaneously."""
+    sorted_segs = sorted(dia_segments, key=lambda s: s["start"])
+    raw: list[dict] = []
+    n = len(sorted_segs)
+    for i in range(n):
+        a = sorted_segs[i]
+        for j in range(i + 1, n):
+            b = sorted_segs[j]
+            if b["start"] >= a["end"]:
+                break
+            if a.get("speaker") == b.get("speaker"):
+                continue
+            ovlp_start = max(a["start"], b["start"])
+            ovlp_end = min(a["end"], b["end"])
+            if ovlp_end - ovlp_start >= min_duration:
+                raw.append({
+                    "start": round(ovlp_start, 3),
+                    "end": round(ovlp_end, 3),
+                    "speakers": sorted({a.get("speaker", "SPEAKER_00"), b.get("speaker", "SPEAKER_01")}),
+                })
+    if not raw:
+        return []
+    # Merge adjacent overlaps
+    raw.sort(key=lambda x: x["start"])
+    merged = [raw[0]]
+    for ov in raw[1:]:
+        last = merged[-1]
+        if ov["start"] <= last["end"]:
+            last["end"] = max(last["end"], ov["end"])
+            last["speakers"] = sorted(set(last["speakers"] + ov["speakers"]))
+        else:
+            merged.append(ov)
+    return merged
+
+
 MAX_REFERENCE_TEXT_CHARS = 300
 MIN_CLONE_DURATION = 15.0
 MIN_REF_DURATION = float(os.environ.get("MIN_REF_DURATION_SECS", "6.0"))
@@ -116,7 +156,15 @@ def run_pipeline(
             music_wav = None
 
     # ── Step 2: ASR transcription ─────────────────────────────────────────────
-    yield "Transcribing with Fish Audio ASR…"
+    _asr_backend = os.environ.get("ASR_BACKEND", "whisperx").lower()
+    if _asr_backend == "whisperx":
+        yield "Transcribing with WhisperX (local model)…"
+        if os.environ.get("HF_TOKEN"):
+            yield "  HF_TOKEN present — speaker diarization will run inside WhisperX."
+        else:
+            yield "  No HF_TOKEN — speaker diarization skipped (set HF_TOKEN to enable)."
+    else:
+        yield "Transcribing with Fish Audio ASR…"
     lang = source_language if source_language and source_language != "auto" else None
     asr_result = transcribe(vocals_wav, language=lang)
     segments = asr_result.get("segments", [])
@@ -127,47 +175,82 @@ def run_pipeline(
             "ASR returned no segments. Ensure the video contains audible speech."
         )
 
+    _whisperx_diarized = asr_result.get("speakers_assigned", False)
     yield f"Transcribed {len(segments)} segments ({total_duration:.1f} s total)."
+    if _whisperx_diarized:
+        _n_spk_asr = len({s.get("speaker") for s in segments if s.get("speaker")})
+        yield f"  WhisperX speaker assignment complete — {_n_spk_asr} speaker(s) detected."
 
     # ── Step 2b: merge word-level fragments into phrase-level groups ──────────
     raw_count = len(segments)
     segments = merge_segments(segments)
     yield f"Merged {raw_count} fragments → {len(segments)} phrase-level segments."
 
-    # ── Step 2c (Phase B): speaker diarization + overlap detection ────────────
+    # ── Step 2c: speaker diarization + overlap detection ─────────────────────
     overlap_regions: list[dict] = []
-    dia_segments: list[dict] = []  # raw diarization speaker segments (saved for ref extraction)
+    dia_segments: list[dict] = []  # speaker time-ranges used for reference clip extraction
+
+    # When WhisperX already assigned speakers, derive dia_segments immediately so
+    # per-speaker reference extraction works even when handle_overlaps is False.
+    if _whisperx_diarized:
+        dia_segments = [
+            {"start": s["start"], "end": s["end"], "speaker": s.get("speaker", "SPEAKER_00")}
+            for s in segments
+            if s.get("speaker")
+        ]
 
     if handle_overlaps:
-        yield "Phase B: running speaker diarization…"
-        try:
-            from .diarization import check_available, run_diarization, assign_speakers_to_segments
-            issues = check_available()
-            if issues:
-                yield "Phase B disabled — " + "; ".join(issues)
-            else:
-                dia = run_diarization(vocals_wav)
-                num_spk = dia["num_speakers"]
-                overlap_regions = dia["overlap_regions"]
-                dia_segments = dia["segments"]
-                segments = assign_speakers_to_segments(
-                    segments, dia["segments"], overlap_regions
+        if _whisperx_diarized:
+            yield "Phase B: WhisperX already performed diarization — skipping separate pyannote run."
+            overlap_regions = _detect_overlaps_from_segments(dia_segments)
+            num_spk = len({d["speaker"] for d in dia_segments})
+            # Tag segments with is_overlap
+            for seg in segments:
+                seg["is_overlap"] = any(
+                    r["start"] - 0.1 <= seg["start"] and seg["end"] <= r["end"] + 0.1
+                    for r in overlap_regions
                 )
+            yield (
+                f"  {num_spk} speaker(s), {len(overlap_regions)} overlap region(s)."
+            )
+            for r in overlap_regions:
+                spk_str = ", ".join(r.get("speakers", []))
                 yield (
-                    f"Diarization complete: {num_spk} speaker(s), "
-                    f"{len(overlap_regions)} overlap region(s)."
+                    f"  ⚡ OVERLAP {r['start']:.2f}s–{r['end']:.2f}s  "
+                    f"[{spk_str}] — will separate + dual-dub"
                 )
-                for r in overlap_regions:
-                    spk_str = ", ".join(r.get("speakers", []))
-                    yield (
-                        f"  ⚡ OVERLAP {r['start']:.2f}s–{r['end']:.2f}s  "
-                        f"[{spk_str}] — will separate + dual-dub"
+            if not overlap_regions:
+                yield "  No overlapping speech detected — proceeding as single-speaker."
+        else:
+            yield "Phase B: running speaker diarization…"
+            try:
+                from .diarization import check_available, run_diarization, assign_speakers_to_segments
+                issues = check_available()
+                if issues:
+                    yield "Phase B disabled — " + "; ".join(issues)
+                else:
+                    dia = run_diarization(vocals_wav)
+                    num_spk = dia["num_speakers"]
+                    overlap_regions = dia["overlap_regions"]
+                    dia_segments = dia["segments"]
+                    segments = assign_speakers_to_segments(
+                        segments, dia["segments"], overlap_regions
                     )
-                if not overlap_regions:
-                    yield "  No overlapping speech detected — proceeding as single-speaker."
-        except Exception as exc:
-            yield f"Diarization failed ({exc}); falling back to single-speaker mode."
-            overlap_regions = []
+                    yield (
+                        f"Diarization complete: {num_spk} speaker(s), "
+                        f"{len(overlap_regions)} overlap region(s)."
+                    )
+                    for r in overlap_regions:
+                        spk_str = ", ".join(r.get("speakers", []))
+                        yield (
+                            f"  ⚡ OVERLAP {r['start']:.2f}s–{r['end']:.2f}s  "
+                            f"[{spk_str}] — will separate + dual-dub"
+                        )
+                    if not overlap_regions:
+                        yield "  No overlapping speech detected — proceeding as single-speaker."
+            except Exception as exc:
+                yield f"Diarization failed ({exc}); falling back to single-speaker mode."
+                overlap_regions = []
 
     # Release diarization model before translation — pyannote + torch consume
     # significant RAM that otherwise starves Ollama's inference.

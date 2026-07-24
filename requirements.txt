@@ -13,10 +13,14 @@ google-genai>=1.0.0
 # Then:
 demucs>=4.0.0
 
-# Phase B — overlapping-speaker handling
-# Install torch/torchaudio first for your platform: https://pytorch.org/get-started/locally/
+# ASR — WhisperX (default backend; uses faster-whisper + pyannote for diarization)
+# Install torch first for your platform: https://pytorch.org/get-started/locally/
 # Then:
+whisperx>=3.1.0
+
+# Phase B — overlapping-speaker handling
+# pyannote and torchaudio are already pulled in as whisperx transitive deps,
+# but pin them explicitly for Phase B (SepFormer separation):
 pyannote.audio>=3.1.0
 speechbrain>=1.0.0
-# torchaudio is a transitive dep of both above but pin it explicitly:
 torchaudio>=2.0.0
