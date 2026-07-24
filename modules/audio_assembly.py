@@ -127,16 +127,20 @@ def extract_speaker_reference_clips(
     result: dict[str, tuple[str, float]] = {}
 
     for speaker, segs in by_speaker.items():
-        # Longest segments first — maximum clean, uninterrupted speech
-        segs_sorted = sorted(segs, key=lambda s: s["end"] - s["start"], reverse=True)
-
-        selected: list[dict] = []
-        accumulated = 0.0
-        for seg in segs_sorted:
-            selected.append(seg)
-            accumulated += seg["end"] - seg["start"]
-            if accumulated >= target_duration:
-                break
+        # Prefer segments with representative energy (not whispered if speaker also speaks normally)
+        try:
+            from .energy import select_representative_segments
+            selected = select_representative_segments(segs, audio_path, target_duration)
+            accumulated = sum(s["end"] - s["start"] for s in selected)
+        except Exception:
+            # Fallback: longest segments first
+            segs_sorted = sorted(segs, key=lambda s: s["end"] - s["start"], reverse=True)
+            selected, accumulated = [], 0.0
+            for seg in segs_sorted:
+                selected.append(seg)
+                accumulated += seg["end"] - seg["start"]
+                if accumulated >= target_duration:
+                    break
 
         if not selected:
             continue

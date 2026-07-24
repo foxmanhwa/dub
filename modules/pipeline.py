@@ -870,6 +870,17 @@ def analyze_video(
         speaker_ref_wavs["SPEAKER_00"] = _ref_wav
         yield "Voice reference ready."
 
+    # ── Energy tagging (for emotion-aware translation) ────────────────────────
+    try:
+        from .energy import tag_segments_with_energy
+        segments = tag_segments_with_energy(vocals_wav, segments)
+        n_loud = sum(1 for s in segments if s.get("energy") == "loud")
+        n_quiet = sum(1 for s in segments if s.get("energy") == "quiet")
+        if n_loud or n_quiet:
+            yield f"Energy analysis: {n_loud} loud, {n_quiet} soft/whispered segment(s) tagged."
+    except Exception as _e_exc:
+        yield f"Energy tagging failed ({_e_exc}) — using neutral tone for all segments."
+
     # ── Speaker embedding analysis ────────────────────────────────────────────
     embedding_suggestions: dict[str, tuple] = {}
     if speaker_ref_wavs:

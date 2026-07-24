@@ -115,6 +115,12 @@ def _llm_call(system_prompt: str, user_content: str, ollama_model: str) -> str:
 
 # ── Translation prompt builder ────────────────────────────────────────────────
 
+_ENERGY_HINTS = {
+    "loud": "⚡loud/excited delivery",
+    "quiet": "🤫soft/whispered delivery",
+}
+
+
 def _build_translation_prompts(
     chunk: list[dict],
     target_language: str,
@@ -128,12 +134,15 @@ def _build_translation_prompts(
 
     # Detect whether any segment carries a speaker label from diarization
     has_speakers = any(seg.get("speaker") for seg in chunk)
+    has_energy = any(seg.get("energy") and seg["energy"] != "normal" for seg in chunk)
 
-    # Build each segment line: [N] (Xs) [SPEAKER_XX] text
+    # Build each segment line: [N] (Xs) [SPEAKER_XX] {emotion} text
     def _fmt(i: int, seg: dict) -> str:
         dur = f"({seg['end'] - seg['start']:.2f}s)"
         spk = f" [{seg['speaker']}]" if seg.get("speaker") else ""
-        return f"[{i + 1}] {dur}{spk} {seg['text']}"
+        energy = seg.get("energy", "normal")
+        hint = f" {{{_ENERGY_HINTS[energy]}}}" if energy in _ENERGY_HINTS else ""
+        return f"[{i + 1}] {dur}{spk}{hint} {seg['text']}"
 
     numbered = "\n".join(_fmt(i, seg) for i, seg in enumerate(chunk))
 
@@ -160,18 +169,26 @@ def _build_translation_prompts(
         "(~2–3 words/second depending on language).\n"
         "3. Preserve the speaker's tone, register, and personality.\n"
     )
+    if has_energy:
+        system_prompt += (
+            "4. Segments tagged {⚡loud/excited delivery} were spoken with high energy — "
+            "prefer vivid, energetic word choices that match the intensity. "
+            "Segments tagged {🤫soft/whispered delivery} were spoken quietly or gently — "
+            "prefer softer, more subdued phrasing.\n"
+        )
+    _next = 5 if has_energy else 4
     if has_speakers:
         system_prompt += (
-            "4. Each segment is labeled with a speaker ID in [SPEAKER_XX] format. "
+            f"{_next}. Each segment is labeled with a speaker ID in [SPEAKER_XX] format. "
             "Keep each speaker's voice, register, and style consistent across all "
             "their segments throughout the clip.\n"
-            "5. Return ONLY the translated lines, one per line, each prefixed with "
+            f"{_next + 1}. Return ONLY the translated lines, one per line, each prefixed with "
             "the same numbered index in square brackets. "
-            "Do NOT include speaker labels in your output. No extra commentary.\n"
+            "Do NOT include speaker labels or energy tags in your output. No extra commentary.\n"
         )
     else:
         system_prompt += (
-            "4. Return ONLY the translated lines, one per line, each prefixed with "
+            f"{_next}. Return ONLY the translated lines, one per line, each prefixed with "
             "the same numbered index in square brackets. No extra commentary.\n"
         )
     system_prompt += "Example output:\n[1] Translated text here\n[2] Another translated line\n"
