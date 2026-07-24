@@ -68,7 +68,10 @@
       "Bash(jobs -l)",
       "Bash(powershell -Command \"Get-Process -Id 18904 | Select-Object Id,Name,MainWindowTitle,CommandLine\")",
       "Bash(tasklist /FI \"PID eq 18904\")",
-      "Bash(powershell *)"
+      "Bash(powershell *)",
+      "Bash(.venv\\\\Scripts\\\\python.exe app.py)",
+      "Read(//tmp/**)",
+      "PowerShell(taskkill *)"
     ]
   }
 }
