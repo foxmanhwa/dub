@@ -418,6 +418,48 @@ def run_pipeline(
 
             yield "Per-speaker voice references ready."
 
+            # ── Step 4c: speaker embedding analysis ───────────────────────────
+            if speaker_ref_wavs:
+                try:
+                    from .speaker_embeddings import (
+                        check_available as _emb_check,
+                        extract_embeddings,
+                        verify_speaker_distinctness,
+                        match_against_library,
+                    )
+                    from .voice_library import load_saved_voice_embeddings
+                    _emb_issues = _emb_check()
+                    if _emb_issues:
+                        yield "Speaker embeddings skipped — " + "; ".join(_emb_issues)
+                    else:
+                        yield "Extracting speaker embeddings (ECAPA-TDNN)…"
+                        det_embs = extract_embeddings(speaker_ref_wavs)
+                        if det_embs:
+                            # Consistency check
+                            if len(det_embs) > 1:
+                                warns = verify_speaker_distinctness(det_embs)
+                                if warns:
+                                    for w in warns:
+                                        yield f"  ⚠ {w}"
+                                else:
+                                    yield f"  ✓ All {len(det_embs)} speakers have distinct embeddings."
+                            # Library matching
+                            saved_embs = load_saved_voice_embeddings()
+                            if saved_embs:
+                                suggestions = match_against_library(det_embs, saved_embs)
+                                if suggestions:
+                                    yield "  Voice library matches:"
+                                    for spk, (vname, sim) in suggestions.items():
+                                        yield f"    {spk} → '{vname}' (similarity {sim:.2f})"
+                                else:
+                                    yield "  No close matches found in saved voice library."
+                            else:
+                                yield "  No saved voices in library to compare against."
+                        else:
+                            yield "  Embedding extraction returned no results."
+                except Exception as _emb_exc:
+                    yield f"Speaker embedding analysis failed ({_emb_exc}) — continuing."
+
         else:
             yield "Extracting voice reference clip…"
             ref_wav = str(work / "reference.wav")
