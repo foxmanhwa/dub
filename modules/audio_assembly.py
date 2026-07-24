@@ -90,16 +90,20 @@ def extract_speaker_reference_clips(
     work_dir: str,
     target_duration: float = 12.0,
     overlap_regions: list[dict] | None = None,
-) -> dict[str, tuple[str, float]]:
+) -> dict[str, tuple[str, float, int, float]]:
     """
     Build a per-speaker voice reference WAV from diarization segments.
 
-    For each speaker, picks their longest non-overlapping segments and
-    concatenates until reaching target_duration (or as close as possible).
+    Picks clean, non-overlapping segments per speaker and concatenates them
+    until reaching target_duration (or as close as possible).  Fragments as
+    short as 0.1 s are accepted — short lines like "yes" / "ok" still carry
+    usable timbre and add up across a back-and-forth dialogue.
 
-    Returns {speaker_id: (wav_path, actual_duration_seconds)}.
-    Speakers with very little audio are still included; callers can check
-    the duration to decide whether quality is acceptable.
+    Returns {speaker_id: (wav_path, clipped_duration, n_fragments, raw_total)}.
+      clipped_duration — seconds of audio in the reference WAV (≤ target_duration)
+      n_fragments      — number of source segments included
+      raw_total        — sum of all included segment durations before the cap
+    Speakers with very little audio are still included; callers check duration.
     """
     work = Path(work_dir)
     work.mkdir(parents=True, exist_ok=True)
@@ -116,15 +120,17 @@ def extract_speaker_reference_clips(
         return False
 
     # Group diarization segments by speaker
+    # 0.1 s floor rejects genuine zero-duration artefacts while keeping short
+    # utterances ("yes", "ok", "hmm") that still carry usable voice timbre.
     by_speaker: dict[str, list[dict]] = {}
     for seg in diarization_segments:
         spk = seg.get("speaker", "SPEAKER_00")
         dur = seg["end"] - seg["start"]
-        if dur < 0.5 or _in_overlap(seg["start"], seg["end"]):
+        if dur < 0.1 or _in_overlap(seg["start"], seg["end"]):
             continue
         by_speaker.setdefault(spk, []).append(seg)
 
-    result: dict[str, tuple[str, float]] = {}
+    result: dict[str, tuple[str, float, int, float]] = {}
 
     for speaker, segs in by_speaker.items():
         # Prefer segments with representative energy (not whispered if speaker also speaks normally)
@@ -188,7 +194,7 @@ def extract_speaker_reference_clips(
             pass  # keep un-normalized if loudnorm fails (e.g. near-silent clip)
 
         actual_dur = min(accumulated, target_duration)
-        result[speaker] = (ref_path, actual_dur)
+        result[speaker] = (ref_path, actual_dur, len(selected), accumulated)
 
     return result
 

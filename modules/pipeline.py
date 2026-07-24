@@ -371,7 +371,12 @@ def run_pipeline(
             _fallback_vid = fallback_voice_id or os.environ.get("FALLBACK_VOICE_ID")
             _min_ref_dur = min_ref_duration if min_ref_duration is not None else MIN_REF_DURATION
             speaker_references = {}
-            for spk, (wav_path, duration) in speaker_clip_results.items():
+            for spk, (wav_path, duration, n_frags, raw_total) in speaker_clip_results.items():
+                _frag_note = (
+                    f"{n_frags} fragment(s), {raw_total:.1f}s total — target reached"
+                    if raw_total >= REFERENCE_CLIP_DURATION
+                    else f"{n_frags} fragment(s), {raw_total:.1f}s total available"
+                )
                 if duration >= _min_ref_dur:
                     ref_bytes, _ = build_voice_reference(wav_path)
                     spk_text = " ".join(
@@ -379,12 +384,12 @@ def run_pipeline(
                     )[:MAX_REFERENCE_TEXT_CHARS]
                     speaker_references[spk] = (ref_bytes, spk_text, None)
                     speaker_ref_wavs[spk] = wav_path
-                    yield f"  {spk} reference: {duration:.1f}s [OK — cloning]"
+                    yield f"  {spk} reference: {duration:.1f}s [{_frag_note}] — cloning"
                 elif _fallback_vid:
                     speaker_references[spk] = (None, "", _fallback_vid)
                     yield (
-                        f"  {spk} reference: {duration:.1f}s — too short "
-                        f"(< {_min_ref_dur:.0f}s); using library voice '{_fallback_vid}' instead"
+                        f"  {spk} reference: {duration:.1f}s [{_frag_note}] — too short "
+                        f"(< {_min_ref_dur:.0f}s); using fallback voice '{_fallback_vid}'"
                     )
                 else:
                     ref_bytes, _ = build_voice_reference(wav_path)
@@ -395,9 +400,8 @@ def run_pipeline(
                     speaker_ref_wavs[spk] = wav_path
                     quality_tag = "⚠ very short" if duration < 3.0 else "⚠ short"
                     yield (
-                        f"  {spk} reference: {duration:.1f}s [{quality_tag} — cloning anyway; "
-                        "set a Fallback voice ID in the UI (or FALLBACK_VOICE_ID in .env) "
-                        "for automatic library fallback]"
+                        f"  {spk} reference: {duration:.1f}s [{quality_tag}, {_frag_note}] — "
+                        "cloning anyway (set FALLBACK_VOICE_ID for automatic library fallback)"
                     )
 
             # Any speaker tagged in segments but missing from diarization clips
@@ -858,9 +862,14 @@ def analyze_video(
             target_duration=REFERENCE_CLIP_DURATION,
             overlap_regions=overlap_regions,
         )
-        for spk, (wav_path, dur) in _clip_results.items():
+        for spk, (wav_path, dur, n_frags, raw_total) in _clip_results.items():
             speaker_ref_wavs[spk] = wav_path
-            yield f"  {spk}: {dur:.1f}s reference clip."
+            if raw_total >= REFERENCE_CLIP_DURATION:
+                yield (f"  {spk}: {dur:.1f}s reference clip "
+                       f"({n_frags} fragment(s), {raw_total:.1f}s available — target reached)")
+            else:
+                yield (f"  {spk}: {dur:.1f}s reference clip "
+                       f"({n_frags} fragment(s), {raw_total:.1f}s total available)")
         yield "Speaker reference clips ready."
     else:
         yield "Extracting voice reference clip (single speaker)…"
@@ -1040,6 +1049,16 @@ def generate_from_analysis(
         for spk in detected_speakers:
             _asgn = speaker_assignments.get(spk, {"mode": "clone"})
             _mode = _asgn.get("mode", "clone")
+
+            if _mode == "upload":
+                _up = _asgn.get("wav_path", "")
+                if _up and Path(_up).exists():
+                    _rb, _ = build_voice_reference(_up)
+                    speaker_references[spk] = (_rb, "", None)
+                    yield f"  {spk} → custom uploaded sample"
+                    continue
+                yield f"  {spk}: uploaded sample not found — falling back to clone"
+                _mode = "clone"
 
             if _mode == "saved":
                 _nm = _asgn.get("name", "")
