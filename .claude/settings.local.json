@@ -61,7 +61,9 @@
       "PowerShell(& \"C:\\\\Users\\\\Pc\\\\Documents\\\\GitHub\\\\dub\\\\.venv\\\\Scripts\\\\pip.exe\" show gradio pillow starlette orjson 2>&1 | Select-String \"^Name:|^Version:\")",
       "Bash(git config *)",
       "Bash(git add *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(pip show *)",
+      "Bash(git commit *)"
     ]
   }
 }
