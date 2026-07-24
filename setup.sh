@@ -227,13 +227,14 @@ else
     fi
     echo
 
-    echo "  [3] HF_TOKEN  (optional)"
-    echo "      Only needed for Phase B multi-speaker / overlapping-speaker dubbing."
-    echo "      For single-speaker videos, press Enter to skip."
+    echo "  [3] HF_TOKEN  (recommended)"
+    echo "      Enables speaker diarization in WhisperX (the default ASR backend)."
+    echo "      Without it, all speech is attributed to a single speaker."
     echo
-    echo "      If you need it:"
+    echo "      Setup:"
     echo "        Token:        https://huggingface.co/settings/tokens"
     echo "        Accept terms: https://huggingface.co/pyannote/speaker-diarization-3.1"
+    echo "                      https://huggingface.co/pyannote/segmentation-3.0"
     echo
     read -rp "  Hugging Face token (Enter to skip): " HF_KEY
     echo
