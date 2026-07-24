@@ -198,10 +198,11 @@ def run_analyze(
             slot_updates.extend([
                 gr.update(visible=False),  # group
                 gr.update(value=""),       # label
-                gr.update(value=None),     # audio
+                gr.update(value=None),     # audio sample
                 gr.update(value="Auto-clone (from video)"),  # mode radio
                 gr.update(choices=[], value=None, visible=False),  # saved dd
                 gr.update(value="", visible=False),           # lib textbox
+                gr.update(value=None, visible=False),         # upload audio
                 gr.update(value=""),                          # embed hint
             ])
         return (log(""), None, gr.update(visible=False), *slot_updates)
@@ -209,7 +210,7 @@ def run_analyze(
     missing = check_env()
     if missing:
         yield (log("Missing env: " + ", ".join(missing)), None, gr.update(visible=False),
-               *([gr.update()] * (MAX_SPEAKER_SLOTS * 7)))
+               *([gr.update()] * (MAX_SPEAKER_SLOTS * 8)))
         return
 
     if video_file is None:
@@ -231,13 +232,13 @@ def run_analyze(
         for item in gen:
             if isinstance(item, str):
                 yield (log(item), None, gr.update(visible=False),
-                       *([gr.update()] * (MAX_SPEAKER_SLOTS * 7)))
+                       *([gr.update()] * (MAX_SPEAKER_SLOTS * 8)))
             elif isinstance(item, dict):
                 analysis_result = item
 
         if not analysis_result:
             yield (log("Analyze returned no result."), None, gr.update(visible=False),
-                   *([gr.update()] * (MAX_SPEAKER_SLOTS * 7)))
+                   *([gr.update()] * (MAX_SPEAKER_SLOTS * 8)))
             return
 
         # Build speaker slot updates
@@ -263,11 +264,12 @@ def run_analyze(
                 slot_updates.extend([
                     gr.update(visible=True),   # group
                     gr.update(value=f"### {spk}"),  # label
-                    gr.update(value=wav_path if Path(wav_path).exists() else None),  # audio
+                    gr.update(value=wav_path if Path(wav_path).exists() else None),  # audio sample
                     gr.update(value=_mode_val),  # mode radio
                     gr.update(choices=saved_voices, value=_saved_val,
                               visible=(_mode_val == "Use saved voice")),  # saved dd
                     gr.update(value="", visible=(_mode_val == "Use library voice ID")),  # lib textbox
+                    gr.update(value=None, visible=False),  # upload audio (always start empty)
                     gr.update(value=hint),     # embed hint
                 ])
             else:
@@ -278,6 +280,7 @@ def run_analyze(
                     gr.update(value="Auto-clone (from video)"),
                     gr.update(choices=[], value=None, visible=False),
                     gr.update(value="", visible=False),
+                    gr.update(value=None, visible=False),
                     gr.update(value=""),
                 ])
 
@@ -288,7 +291,7 @@ def run_analyze(
     except Exception as e:
         tb = traceback.format_exc()
         yield (log(f"Analyze error: {e}\n\n{tb}"), None, gr.update(visible=False),
-               *([gr.update()] * (MAX_SPEAKER_SLOTS * 7)))
+               *([gr.update()] * (MAX_SPEAKER_SLOTS * 8)))
 
 
 # ── Stage 2: Generate ─────────────────────────────────────────────────────────
@@ -341,9 +344,10 @@ def run_generate(
         yield log("Missing env: " + ", ".join(missing)), None, None, None, None, *_EMPTY_TAIL
         return
 
-    slot_modes = slot_fields[0::3]
-    slot_saved = slot_fields[1::3]
-    slot_libs  = slot_fields[2::3]
+    slot_modes   = slot_fields[0::4]
+    slot_saved   = slot_fields[1::4]
+    slot_libs    = slot_fields[2::4]
+    slot_uploads = slot_fields[3::4]
 
     speaker_ref_wavs = analysis_state.get("speaker_ref_wavs", {})
     all_speakers = sorted(speaker_ref_wavs.keys())
@@ -352,7 +356,13 @@ def run_generate(
         if i >= MAX_SPEAKER_SLOTS:
             break
         _m = slot_modes[i] if i < len(slot_modes) else "Auto-clone (from video)"
-        if _m == "Use saved voice":
+        if _m == "Upload custom sample":
+            _up = slot_uploads[i] if i < len(slot_uploads) else None
+            if _up:
+                speaker_assignments[spk] = {"mode": "upload", "wav_path": str(_up)}
+            else:
+                speaker_assignments[spk] = {"mode": "clone"}
+        elif _m == "Use saved voice":
             _sn = slot_saved[i] if i < len(slot_saved) else None
             speaker_assignments[spk] = {"mode": "saved", "name": _sn or ""}
         elif _m == "Use library voice ID":
@@ -537,6 +547,12 @@ def regenerate_segment_tts(
 
     if _mode == "library":
         ref_id = asgn.get("voice_id") or gen_ctx.get("voice_id")
+    elif _mode == "upload":
+        _up_path = asgn.get("wav_path", "")
+        if _up_path and Path(_up_path).exists():
+            ref_bytes, _ = build_voice_reference(_up_path)
+        else:
+            _mode = "clone"  # uploaded file gone — fall through
     elif _mode == "saved":
         _nm = asgn.get("name", "")
         from modules.voice_library import load_saved_voices
@@ -711,13 +727,14 @@ def build_ui() -> gr.Blocks:
             saved_voices_initial = list(load_saved_voices().keys())
 
             # Pre-create MAX_SPEAKER_SLOTS slots
-            spk_groups = []
-            spk_labels = []
-            spk_audios = []
-            spk_modes  = []
-            spk_saveds = []
-            spk_libs   = []
-            spk_hints  = []
+            spk_groups   = []
+            spk_labels   = []
+            spk_audios   = []
+            spk_modes    = []
+            spk_saveds   = []
+            spk_libs     = []
+            spk_uploads  = []
+            spk_hints    = []
 
             for _i in range(MAX_SPEAKER_SLOTS):
                 with gr.Group(visible=False) as _grp:
@@ -725,7 +742,12 @@ def build_ui() -> gr.Blocks:
                     _aud = gr.Audio(label="Sample clip", interactive=False, visible=True)
                     _hint = gr.Markdown("")
                     _mode = gr.Radio(
-                        choices=["Auto-clone (from video)", "Use saved voice", "Use library voice ID"],
+                        choices=[
+                            "Auto-clone (from video)",
+                            "Use saved voice",
+                            "Use library voice ID",
+                            "Upload custom sample",
+                        ],
                         value="Auto-clone (from video)",
                         label="Voice assignment",
                     )
@@ -743,12 +765,20 @@ def build_ui() -> gr.Blocks:
                             placeholder="Paste voice ID from fish.audio/model",
                             visible=False,
                         )
+                    _upload = gr.Audio(
+                        label="Upload your own voice sample",
+                        sources=["upload"],
+                        type="filepath",
+                        interactive=True,
+                        visible=False,
+                    )
                 spk_groups.append(_grp)
                 spk_labels.append(_lbl)
                 spk_audios.append(_aud)
                 spk_modes.append(_mode)
                 spk_saveds.append(_saved)
                 spk_libs.append(_lib)
+                spk_uploads.append(_upload)
                 spk_hints.append(_hint)
 
             # Wire each slot's mode radio to show/hide sub-inputs
@@ -757,14 +787,17 @@ def build_ui() -> gr.Blocks:
                     return (
                         gr.update(visible=(mode == "Use saved voice")),
                         gr.update(visible=(mode == "Use library voice ID")),
+                        gr.update(visible=(mode == "Upload custom sample")),
                     )
                 return _on_mode
 
-            for _i, (_mode_comp, _saved_comp, _lib_comp) in enumerate(zip(spk_modes, spk_saveds, spk_libs)):
+            for _i, (_mode_comp, _saved_comp, _lib_comp, _upload_comp) in enumerate(
+                zip(spk_modes, spk_saveds, spk_libs, spk_uploads)
+            ):
                 _mode_comp.change(
                     fn=_make_mode_handler(_i),
                     inputs=[_mode_comp],
-                    outputs=[_saved_comp, _lib_comp],
+                    outputs=[_saved_comp, _lib_comp, _upload_comp],
                 )
 
         # ── Step 3: Generation settings + button ─────────────────────────────
@@ -959,9 +992,9 @@ def build_ui() -> gr.Blocks:
         # ── Analyze button ────────────────────────────────────────────────────
         _analyze_outputs = (
             [log_box, analysis_state, speaker_panel]
-            + [c for triple in zip(spk_groups, spk_labels, spk_audios,
-                                   spk_modes, spk_saveds, spk_libs, spk_hints)
-               for c in triple]
+            + [c for quad in zip(spk_groups, spk_labels, spk_audios,
+                                 spk_modes, spk_saveds, spk_libs, spk_uploads, spk_hints)
+               for c in quad]
         )
         analyze_btn.click(
             fn=run_analyze,
@@ -970,8 +1003,8 @@ def build_ui() -> gr.Blocks:
         )
 
         # ── Generate button ───────────────────────────────────────────────────
-        # Per-speaker inputs: mode, saved, lib — for each slot
-        _slot_inputs = [c for triple in zip(spk_modes, spk_saveds, spk_libs) for c in triple]
+        # Per-speaker inputs: mode, saved, lib, upload — for each slot
+        _slot_inputs = [c for quad in zip(spk_modes, spk_saveds, spk_libs, spk_uploads) for c in quad]
 
         generate_btn.click(
             fn=run_generate,
