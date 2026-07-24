@@ -49,40 +49,67 @@ def _silence_speechbrain_lazy_errors() -> None:
         pass
 
 
+def _log(msg: str) -> None:
+    print(msg, file=sys.stderr, flush=True)
+
+
 def _run(audio_path: str, result_path: str, language: str | None) -> None:
     import torch
     import whisperx
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     compute_type = "float16" if device == "cuda" else "int8"
-    model_name = os.environ.get("WHISPERX_MODEL", "large-v2")
+
+    # CPU default is "small" — large-v2 on CPU can take 30+ minutes for a short
+    # clip and is rarely worth the wait without a GPU.  GPU users get large-v2.
+    # Override either way with WHISPERX_MODEL in .env.
+    _default_model = "large-v2" if device == "cuda" else "small"
+    model_name = os.environ.get("WHISPERX_MODEL", _default_model)
     hf_token = os.environ.get("HF_TOKEN")
 
-    print(
-        f"[whisperx] device={device}  compute_type={compute_type}  model={model_name}",
-        file=sys.stderr,
+    # batch_size=1 is optimal on CPU — larger batches don't parallelise on CPU
+    # and waste RAM without speed benefit.
+    batch_size = 16 if device == "cuda" else 1
+
+    _log(
+        f"[whisperx] device={device}  model={model_name}  "
+        f"compute_type={compute_type}  batch_size={batch_size}"
     )
+    if device == "cpu":
+        _log(
+            "[whisperx] Running on CPU — typical time for a 1-2 min clip: "
+            "~3-5 min with 'small', 30+ min with 'large-v2'. "
+            "Set WHISPERX_MODEL=small or ASR_BACKEND=fish to override."
+        )
 
     # ── 1. Transcription ──────────────────────────────────────────────────────
+    _log(f"[whisperx] Loading model '{model_name}'… (first run downloads weights)")
     model = whisperx.load_model(
         model_name,
         device,
         compute_type=compute_type,
         language=language,  # None → auto-detect
     )
+    _log("[whisperx] Model loaded.")
+
     audio = whisperx.load_audio(audio_path)
-    batch_size = 16 if device == "cuda" else 4
+    audio_duration = float(len(audio)) / 16000.0
+    _log(f"[whisperx] Transcribing {audio_duration:.1f}s of audio…")
     result = model.transcribe(audio, batch_size=batch_size)
+    n_raw = len(result.get("segments", []))
+    _log(f"[whisperx] Transcription complete: {n_raw} raw segment(s).")
     del model  # free GPU/CPU memory before alignment
 
     detected_language = result.get("language") or language or "en"
-    print(f"[whisperx] detected language: {detected_language}", file=sys.stderr)
+    _log(f"[whisperx] Detected language: {detected_language}")
 
     # ── 2. Word-level alignment ───────────────────────────────────────────────
+    _log("[whisperx] Loading alignment model…")
     try:
         model_a, metadata = whisperx.load_align_model(
             language_code=detected_language, device=device
         )
+        _log("[whisperx] Aligning words…")
         result = whisperx.align(
             result["segments"],
             model_a,
@@ -92,30 +119,30 @@ def _run(audio_path: str, result_path: str, language: str | None) -> None:
             return_char_alignments=False,
         )
         del model_a
-        print("[whisperx] word-level alignment complete", file=sys.stderr)
+        _log("[whisperx] Word-level alignment complete.")
     except Exception as exc:
-        print(
-            f"[whisperx] alignment failed ({exc}) — keeping segment-level timestamps",
-            file=sys.stderr,
+        _log(
+            f"[whisperx] Alignment failed ({exc}) — keeping segment-level timestamps."
         )
 
     # ── 3. Speaker diarization (optional — requires HF_TOKEN) ────────────────
     speakers_assigned = False
     if hf_token:
+        _log("[whisperx] Running speaker diarization (pyannote)…")
         try:
-            print("[whisperx] running speaker diarization…", file=sys.stderr)
             diarize_model = whisperx.DiarizationPipeline(
                 use_auth_token=hf_token, device=device
             )
             diarize_segs = diarize_model(audio)
             result = whisperx.assign_word_speakers(diarize_segs, result)
             speakers_assigned = True
-            print("[whisperx] speaker assignment complete", file=sys.stderr)
+            _log("[whisperx] Speaker assignment complete.")
         except Exception as exc:
-            print(
-                f"[whisperx] diarization failed ({exc}) — skipping speaker assignment",
-                file=sys.stderr,
+            _log(
+                f"[whisperx] Diarization failed ({exc}) — skipping speaker assignment."
             )
+    else:
+        _log("[whisperx] No HF_TOKEN — speaker diarization skipped.")
 
     # ── 4. Normalise output ───────────────────────────────────────────────────
     # audio is a 1-D float32 array at 16 kHz

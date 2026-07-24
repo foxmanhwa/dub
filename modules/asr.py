@@ -9,35 +9,46 @@ from pathlib import Path
 FISH_ASR_URL = "https://api.fish.audio/v1/asr"
 
 
-def transcribe(audio_path: str | Path, language: str | None = None) -> dict:
+def transcribe(audio_path: str | Path, language: str | None = None):
     """
-    Transcribe audio using the configured ASR backend.
+    Generator: yields progress strings, then the result dict as the final item.
 
     ASR_BACKEND env var:
       "whisperx" (default) — local WhisperX; includes word-level timestamps
                              and speaker diarization when HF_TOKEN is set.
-      "fish"               — Fish Audio cloud ASR (original behaviour).
+                             Model defaults to "small" on CPU, "large-v2" on GPU.
+                             Override with WHISPERX_MODEL in .env.
+      "fish"               — Fish Audio cloud ASR (fast, no local model needed).
 
-    Returns a dict with at minimum:
+    Final yielded item is a dict with at minimum:
       {"text": str, "duration": float, "segments": [{"text", "start", "end"}, ...]}
 
     WhisperX additionally sets:
       {"language": str, "speakers_assigned": bool}
     and each segment may include a "speaker" field.
+
+    Callers:
+        asr_result = None
+        for item in transcribe(path, language):
+            if isinstance(item, str):
+                yield item        # log progress
+            else:
+                asr_result = item
     """
     backend = os.environ.get("ASR_BACKEND", "whisperx").lower()
     if backend == "whisperx":
         from .asr_whisperx import transcribe as _wx_transcribe, check_available
         issues = check_available()
         if issues:
-            print(
-                f"[ASR] WhisperX not available ({'; '.join(issues)}); "
-                "falling back to Fish Audio ASR",
-                file=sys.stderr,
+            yield (
+                f"[ASR] WhisperX unavailable ({'; '.join(issues)}) — "
+                "falling back to Fish Audio ASR"
             )
         else:
-            return _wx_transcribe(audio_path, language)
-    return _transcribe_fish(audio_path, language)
+            yield from _wx_transcribe(audio_path, language)
+            return
+    # Fish Audio: synchronous — yield result dict directly
+    yield _transcribe_fish(audio_path, language)
 
 
 def _transcribe_fish(audio_path: str | Path, language: str | None = None) -> dict:
