@@ -1,4 +1,4 @@
-"""Fish Audio ASR — transcribes audio with segment timestamps."""
+"""ASR dispatch — routes to WhisperX (default) or Fish Audio based on ASR_BACKEND."""
 
 import os
 import sys
@@ -11,20 +11,37 @@ FISH_ASR_URL = "https://api.fish.audio/v1/asr"
 
 def transcribe(audio_path: str | Path, language: str | None = None) -> dict:
     """
-    Transcribe audio using Fish Audio ASR.
+    Transcribe audio using the configured ASR backend.
 
-    Returns the Fish Audio response dict:
-      {
-        "text": "...",
-        "duration": 12.3,
-        "segments": [
-          {"text": "...", "start": 0.0, "end": 1.5},
-          ...
-        ]
-      }
+    ASR_BACKEND env var:
+      "whisperx" (default) — local WhisperX; includes word-level timestamps
+                             and speaker diarization when HF_TOKEN is set.
+      "fish"               — Fish Audio cloud ASR (original behaviour).
 
-    language: BCP-47 code ("en", "zh", "es" …) or None for auto-detect.
+    Returns a dict with at minimum:
+      {"text": str, "duration": float, "segments": [{"text", "start", "end"}, ...]}
+
+    WhisperX additionally sets:
+      {"language": str, "speakers_assigned": bool}
+    and each segment may include a "speaker" field.
     """
+    backend = os.environ.get("ASR_BACKEND", "whisperx").lower()
+    if backend == "whisperx":
+        from .asr_whisperx import transcribe as _wx_transcribe, check_available
+        issues = check_available()
+        if issues:
+            print(
+                f"[ASR] WhisperX not available ({'; '.join(issues)}); "
+                "falling back to Fish Audio ASR",
+                file=sys.stderr,
+            )
+        else:
+            return _wx_transcribe(audio_path, language)
+    return _transcribe_fish(audio_path, language)
+
+
+def _transcribe_fish(audio_path: str | Path, language: str | None = None) -> dict:
+    """Fish Audio ASR — cloud API, no local model required."""
     api_key = os.environ["FISH_AUDIO_API_KEY"]
     audio_path = Path(audio_path)
 
@@ -60,9 +77,7 @@ def transcribe(audio_path: str | Path, language: str | None = None) -> dict:
             detail = resp.json()
         except Exception:
             detail = resp.text[:1000]
-        raise RuntimeError(
-            f"Fish Audio ASR {resp.status_code}: {detail}"
-        )
+        raise RuntimeError(f"Fish Audio ASR {resp.status_code}: {detail}")
 
     return resp.json()
 

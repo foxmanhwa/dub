@@ -68,11 +68,37 @@ def save_cloned_voice(name: str, ref_audio_path: str, reference_text: str = "") 
     dest = SAVED_VOICES_AUDIO_DIR / f"{_slugify(name)}.wav"
     shutil.copy2(ref_audio_path, dest)
 
+    # Compute speaker embedding for future similarity matching (best-effort).
+    embedding: list[float] | None = None
+    try:
+        from .speaker_embeddings import extract_embeddings, check_available as _emb_check
+        if not _emb_check():
+            embs = extract_embeddings({name: str(dest)})
+            embedding = embs.get(name)
+    except Exception:
+        pass
+
     voices = load_saved_voices()
     SAVED_VOICES_FILE.parent.mkdir(parents=True, exist_ok=True)
-    voices[name] = {"audio_path": str(dest), "reference_text": reference_text}
+    entry: dict = {"audio_path": str(dest), "reference_text": reference_text}
+    if embedding is not None:
+        entry["embedding"] = embedding
+    voices[name] = entry
     with open(SAVED_VOICES_FILE, "w", encoding="utf-8") as f:
         json.dump(voices, f, indent=2, ensure_ascii=False)
+
+
+def load_saved_voice_embeddings() -> dict[str, list[float]]:
+    """
+    Return {name: embedding} for saved voices that have a stored embedding.
+    Voices without a stored embedding are excluded (they'll be computed on demand).
+    """
+    voices = load_saved_voices()
+    return {
+        name: entry["embedding"]
+        for name, entry in voices.items()
+        if entry.get("embedding")
+    }
 
 
 def delete_saved_voice(name: str) -> None:
