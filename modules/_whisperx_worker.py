@@ -130,7 +130,7 @@ def _run(audio_path: str, result_path: str, language: str | None) -> None:
     if hf_token:
         _log("[whisperx] Running speaker diarization (pyannote)…")
         try:
-            diarize_model = whisperx.DiarizationPipeline(
+            diarize_model = whisperx.diarize.DiarizationPipeline(
                 use_auth_token=hf_token, device=device
             )
             # Pass a pre-converted tensor dict to bypass any file-path audio
