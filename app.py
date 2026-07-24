@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import gradio as gr
-from modules.pipeline import analyze_video, generate_from_analysis, run_pipeline
+from modules.pipeline import analyze_video, generate_from_analysis, run_pipeline, rebuild_dubbed_video
 from modules.voice_library import (
     list_fish_voices,
     format_voice_label,
@@ -304,12 +304,17 @@ def run_generate(
     content_context: str,
     fallback_voice_id: str,
     min_ref_duration: float,
-    # Per-speaker assignment fields (6 slots × 3 fields = 18)
+    # Per-speaker assignment fields (MAX_SPEAKER_SLOTS × 3 = 18)
     *slot_fields,
     progress=gr.Progress(track_tqdm=False),
 ):
     """
-    Generator yielding 13-tuple matching the original generate_redub outputs.
+    Yields N-tuples:
+      (log, video, transcript, srt, orig_video,
+       speaker_refs_state, save_group, save_speaker_dd, save_status,
+       timing_table, backtrans_table, timing_csv, backtrans_csv,
+       segments_state, gen_ctx_state, seg_editor_update, seg_df_update)
+    = 17 outputs
     """
     log_lines: list[str] = []
 
@@ -317,25 +322,29 @@ def run_generate(
         log_lines.append(msg)
         return "\n".join(log_lines)
 
-    _EMPTY = (None, None, None, None,
-              {}, gr.update(visible=False), gr.update(visible=False, choices=[]), "",
-              None, None, None, None)
+    _EMPTY_TAIL = (
+        {}, gr.update(visible=False), gr.update(visible=False, choices=[]), "",
+        None, None, None, None,
+        [], None, gr.update(visible=False), None,
+    )
+
+    def _yield_progress(msg):
+        return (log(msg), None, None, None, None,
+                *_EMPTY_TAIL)
 
     if analysis_state is None:
-        yield log("Please run Analyze first."), *_EMPTY
+        yield log("Please run Analyze first."), None, None, None, None, *_EMPTY_TAIL
         return
 
     missing = check_env()
     if missing:
-        yield log("Missing env: " + ", ".join(missing)), *_EMPTY
+        yield log("Missing env: " + ", ".join(missing)), None, None, None, None, *_EMPTY_TAIL
         return
 
-    # Unpack per-speaker slot fields: [mode0, saved0, lib0, mode1, saved1, lib1, ...]
     slot_modes = slot_fields[0::3]
     slot_saved = slot_fields[1::3]
     slot_libs  = slot_fields[2::3]
 
-    # Rebuild speaker_assignments from slot values
     speaker_ref_wavs = analysis_state.get("speaker_ref_wavs", {})
     all_speakers = sorted(speaker_ref_wavs.keys())
     speaker_assignments: dict[str, dict] = {}
@@ -352,24 +361,36 @@ def run_generate(
         else:
             speaker_assignments[spk] = {"mode": "clone"}
 
-    # Global voice mode (for single-speaker or explicit override)
     global_voice_id: str | None = None
     if not all_speakers:
         if voice_mode == "library":
             global_voice_id = library_voice_id or None
             if not global_voice_id:
-                yield log("Please select a library voice first."), *_EMPTY
+                yield log("Please select a library voice first."), None, None, None, None, *_EMPTY_TAIL
                 return
         elif voice_mode == "saved":
             global_voice_id = saved_voice_name or None
             if not global_voice_id:
-                yield log("Please select a saved voice."), *_EMPTY
+                yield log("Please select a saved voice."), None, None, None, None, *_EMPTY_TAIL
                 return
-        speaker_assignments = None  # use global voice_mode
+        speaker_assignments = None
 
     video_path = analysis_state["video_path"]
     out_video = transcript = srt = None
     timing_df = backtrans_df = timing_csv = backtrans_csv = None
+    final_segments: list[dict] = []
+
+    # Build generation context for the segment editor (voice refs by WAV path)
+    gen_ctx = {
+        "speaker_ref_wavs": speaker_ref_wavs,
+        "speaker_assignments": speaker_assignments or {},
+        "target_language": target_lang_name,
+        "source_language": source_lang_code if source_lang_code != "auto" else None,
+        "voice_mode": voice_mode,
+        "voice_id": global_voice_id,
+        "content_context": (content_context or "").strip() or None,
+        "fallback_voice_id": (fallback_voice_id or "").strip() or None,
+    }
 
     try:
         gen = generate_from_analysis(
@@ -387,8 +408,7 @@ def run_generate(
         for item in gen:
             if isinstance(item, str):
                 yield (log(item), None, None, None, video_path,
-                       {}, gr.update(visible=False), gr.update(visible=False, choices=[]), "",
-                       None, None, None, None)
+                       *_EMPTY_TAIL)
             elif isinstance(item, dict):
                 out_video = item.get("video")
                 transcript = item.get("transcript")
@@ -397,22 +417,31 @@ def run_generate(
                 timing_csv = item.get("timing_csv")
                 backtrans_df = item.get("backtrans_df")
                 backtrans_csv = item.get("backtrans_csv")
+                final_segments = item.get("segments", [])
 
-        final_log = log("Done! Redubbed video is ready.")
+        final_log = log("Done! Redubbed video is ready. Edit translations below if needed.")
         can_save = voice_mode == "clone" and bool(speaker_ref_wavs)
         speakers = sorted(speaker_ref_wavs.keys())
         multi = len(speakers) > 1
-        speaker_dd_update = gr.update(choices=speakers, value=speakers[0] if speakers else None, visible=multi)
+        speaker_dd_update = gr.update(
+            choices=speakers, value=speakers[0] if speakers else None, visible=multi
+        )
+
+        # Build segment editor DataFrame
+        seg_df = _segments_to_df(final_segments)
+
         yield (final_log, out_video, transcript, srt, video_path,
                speaker_ref_wavs, gr.update(visible=can_save), speaker_dd_update, "",
-               timing_df, backtrans_df, timing_csv, backtrans_csv)
+               timing_df, backtrans_df, timing_csv, backtrans_csv,
+               final_segments, gen_ctx, gr.update(visible=True), seg_df)
 
     except Exception as e:
         tb = traceback.format_exc()
         yield (log(f"Error: {e}\n\n{tb}"), None, None, None,
-               analysis_state.get("video_path"), {}, gr.update(visible=False),
-               gr.update(visible=False, choices=[]), "",
-               None, None, None, None)
+               analysis_state.get("video_path"),
+               {}, gr.update(visible=False), gr.update(visible=False, choices=[]), "",
+               None, None, None, None,
+               [], None, gr.update(visible=False), None)
 
 
 # ── Save voice handler ────────────────────────────────────────────────────────
@@ -438,6 +467,147 @@ def handle_save_voice(name: str, speaker_id: str | None, speaker_refs: dict):
         return gr.update(choices=list(voices.keys()), value=name), f"Voice **{name}** saved!"
     except Exception as e:
         return gr.update(), f"Error saving voice: {e}"
+
+
+# ── Segment editor helpers ────────────────────────────────────────────────────
+
+import pandas as pd
+
+
+def _segments_to_df(segments: list[dict]):
+    """Convert segments list to a DataFrame for the editor."""
+    rows = []
+    for i, s in enumerate(segments):
+        if s.get("is_overlap"):
+            continue
+        rows.append({
+            "#": i,
+            "Speaker": s.get("speaker", "SPEAKER_00"),
+            "Start": round(s.get("start", 0.0), 2),
+            "End": round(s.get("end", 0.0), 2),
+            "Original": s.get("text", ""),
+            "Translation": s.get("translated_text", ""),
+            "TTS": "✓" if s.get("tts_path") else ("⚠" if s.get("tts_error") else "—"),
+        })
+    if not rows:
+        return pd.DataFrame(columns=["#", "Speaker", "Start", "End", "Original", "Translation", "TTS"])
+    return pd.DataFrame(rows)
+
+
+def regenerate_segment_tts(
+    seg_df,
+    row_idx: int,
+    segments_state: list[dict],
+    gen_ctx: dict | None,
+    analysis_state: dict | None,
+):
+    """Re-synthesize TTS for a single segment (row_idx into segments_state)."""
+    if gen_ctx is None or analysis_state is None:
+        return seg_df, segments_state, "Run Generate first."
+    if not (0 <= row_idx < len(segments_state)):
+        return seg_df, segments_state, f"Row {row_idx} out of range (0–{len(segments_state)-1})."
+
+    seg = segments_state[row_idx]
+    if seg.get("is_overlap"):
+        return seg_df, segments_state, "Cannot regenerate overlap segments."
+
+    # Get updated translation from the DataFrame (user may have edited it)
+    try:
+        if seg_df is not None and hasattr(seg_df, "iloc"):
+            # Find the row in the df where "#" == row_idx
+            if "#" in seg_df.columns:
+                mask = seg_df["#"] == row_idx
+                if mask.any():
+                    new_text = str(seg_df.loc[mask, "Translation"].iloc[0]).strip()
+                    if new_text:
+                        seg = {**seg, "translated_text": new_text}
+    except Exception:
+        pass
+
+    text = seg.get("translated_text", "").strip()
+    if not text:
+        return seg_df, segments_state, f"Segment {row_idx} has no translated text to synthesize."
+
+    # Resolve voice reference for this speaker
+    from modules.tts import synthesize, build_voice_reference
+    spk = seg.get("speaker", "SPEAKER_00")
+    asgn = (gen_ctx.get("speaker_assignments") or {}).get(spk, {"mode": "clone"})
+    _mode = asgn.get("mode", "clone")
+    ref_bytes = ref_text = ref_id = None
+
+    if _mode == "library":
+        ref_id = asgn.get("voice_id") or gen_ctx.get("voice_id")
+    elif _mode == "saved":
+        _nm = asgn.get("name", "")
+        from modules.voice_library import load_saved_voices
+        _sv = load_saved_voices()
+        if _nm and _nm in _sv:
+            ref_bytes, _ = build_voice_reference(_sv[_nm]["audio_path"])
+            ref_text = _sv[_nm].get("reference_text", "")
+        else:
+            _mode = "clone"
+    if _mode == "clone":
+        _wp = (gen_ctx.get("speaker_ref_wavs") or {}).get(spk)
+        if _wp and Path(_wp).exists():
+            ref_bytes, _ = build_voice_reference(_wp)
+        elif gen_ctx.get("voice_id"):
+            ref_id = gen_ctx["voice_id"]
+
+    try:
+        audio = synthesize(
+            text=text,
+            reference_audio_bytes=ref_bytes,
+            reference_text=ref_text or "",
+            reference_id=ref_id,
+        )
+        work = Path(analysis_state["work_dir"])
+        tts_dir = work / "tts"
+        tts_dir.mkdir(exist_ok=True)
+        out_path = tts_dir / f"seg_{row_idx:04d}_edit.mp3"
+        out_path.write_bytes(audio)
+
+        updated_segments = list(segments_state)
+        updated_segments[row_idx] = {
+            **seg,
+            "tts_path": str(out_path),
+            "tts_error": None,
+        }
+        updated_df = _segments_to_df(updated_segments)
+        return updated_df, updated_segments, f"Segment {row_idx} re-synthesized."
+
+    except Exception as exc:
+        return seg_df, segments_state, f"TTS error for segment {row_idx}: {exc}"
+
+
+def rebuild_output_handler(
+    segments_state: list[dict],
+    seg_df,
+    analysis_state: dict | None,
+):
+    """Reassemble dubbed video from current segments (after editing)."""
+    if analysis_state is None:
+        return None, "Run Generate first."
+    if not segments_state:
+        return None, "No segments available."
+
+    # Flush any edited translations from the DataFrame back into segments
+    segments = list(segments_state)
+    try:
+        if seg_df is not None and hasattr(seg_df, "iterrows"):
+            for _, row in seg_df.iterrows():
+                idx = int(row.get("#", -1))
+                if 0 <= idx < len(segments) and not segments[idx].get("is_overlap"):
+                    new_text = str(row.get("Translation", "")).strip()
+                    if new_text:
+                        segments[idx] = {**segments[idx], "translated_text": new_text}
+    except Exception:
+        pass
+
+    try:
+        new_video = rebuild_dubbed_video(segments, analysis_state)
+        return new_video, "Output rebuilt successfully."
+    except Exception as exc:
+        return None, f"Rebuild error: {exc}"
 
 
 # ── Build UI ─────────────────────────────────────────────────────────────────
@@ -695,6 +865,36 @@ def build_ui() -> gr.Blocks:
                     )
                     backtrans_csv_dl = gr.File(label="back_translation.csv", interactive=False)
 
+        # ── Segment editor (Step 4) ───────────────────────────────────────────
+        segments_state = gr.State([])
+        gen_ctx_state = gr.State(None)
+
+        with gr.Group(visible=False) as seg_editor_group:
+            gr.Markdown("### Segment Editor")
+            gr.Markdown(
+                "Edit translations in the **Translation** column, then click "
+                "**Regenerate TTS for row N** to re-synthesize just that segment, "
+                "or **Rebuild Output** to reassemble the full video."
+            )
+            seg_df_editor = gr.Dataframe(
+                label="Segments",
+                interactive=True,
+                wrap=True,
+                column_widths=["4%", "8%", "5%", "5%", "34%", "34%", "5%"],
+            )
+            with gr.Row():
+                regen_row_input = gr.Number(
+                    label="Row # to regenerate",
+                    value=0,
+                    precision=0,
+                    minimum=0,
+                    step=1,
+                    scale=1,
+                )
+                regen_seg_btn = gr.Button("Regenerate TTS for row N", scale=2)
+                rebuild_btn = gr.Button("Rebuild Output", variant="primary", scale=2)
+            regen_status = gr.Markdown("")
+
         # ── Save cloned voice panel ───────────────────────────────────────────
         speaker_refs_state = gr.State(value={})
 
@@ -786,7 +986,21 @@ def build_ui() -> gr.Blocks:
                 log_box, redubbed_player, transcript_dl, srt_dl, original_player,
                 speaker_refs_state, save_voice_group, save_speaker_dd, save_status,
                 timing_table, backtrans_table, timing_csv_dl, backtrans_csv_dl,
+                # Segment editor outputs
+                segments_state, gen_ctx_state, seg_editor_group, seg_df_editor,
             ],
+        )
+
+        regen_seg_btn.click(
+            fn=regenerate_segment_tts,
+            inputs=[seg_df_editor, regen_row_input, segments_state, gen_ctx_state, analysis_state],
+            outputs=[seg_df_editor, segments_state, regen_status],
+        )
+
+        rebuild_btn.click(
+            fn=rebuild_output_handler,
+            inputs=[segments_state, seg_df_editor, analysis_state],
+            outputs=[redubbed_player, regen_status],
         )
 
         save_btn.click(

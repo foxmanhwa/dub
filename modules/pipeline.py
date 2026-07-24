@@ -1320,4 +1320,49 @@ def generate_from_analysis(
         "timing_csv": timing_csv_path,
         "backtrans_df": backtrans_df,
         "backtrans_csv": backtrans_csv_path,
+        # Full segment list (used by the segment editor / rebuild flow)
+        "segments": segments,
     }
+
+
+def rebuild_dubbed_video(
+    segments: list[dict],
+    analysis: dict,
+    output_dir: str | None = None,
+) -> str:
+    """
+    Re-assemble dubbed audio from existing TTS clips and mux back into the video.
+    Used by the segment editor "Rebuild output" button after user edits.
+
+    Returns the path to the new video file.
+    """
+    work = Path(analysis["work_dir"])
+    out = work.parent if output_dir is None else Path(output_dir)
+    vocals_wav = analysis["vocals_wav"]
+    music_wav = analysis.get("music_wav")
+    total_duration = analysis["total_duration"]
+    video_path = analysis["video_path"]
+
+    dubbed_wav = str(work / "dubbed_audio_rebuilt.wav")
+    assemble_audio_track(
+        segments=segments,
+        original_audio_path=vocals_wav,
+        total_duration=total_duration,
+        output_path=dubbed_wav,
+        work_dir=str(work / "assembly_rebuild"),
+    )
+
+    use_stereo_mux = False
+    if music_wav and Path(music_wav).exists():
+        try:
+            from .music_separation import mix_vocals_with_music
+            mixed_wav = str(work / "dubbed_mixed_rebuilt.wav")
+            mix_vocals_with_music(dubbed_wav, music_wav, mixed_wav, total_duration)
+            dubbed_wav = mixed_wav
+            use_stereo_mux = True
+        except Exception:
+            pass
+
+    out_video = str(out / "redubbed.mp4")
+    mux_audio_into_video(video_path, dubbed_wav, out_video, stereo=use_stereo_mux)
+    return out_video
