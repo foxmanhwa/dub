@@ -47,7 +47,7 @@ Video → FFmpeg extract audio
 
 ```
       → LLM translation — duration-conscious, energy-annotated, chunked
-      → Fish Audio TTS — per-speaker voice (clone / library / saved)
+      → Fish Audio TTS — per-speaker voice (clone / saved / library / uploaded sample)
       → Iterative retranslation — re-asks LLM to shorten/lengthen if TTS overshoots slot
       → FFmpeg time-fit each clip → reassemble dubbed audio
       → [optional] FFmpeg mix dubbed vocals + original music
@@ -131,9 +131,18 @@ Open [http://localhost:7860](http://localhost:7860) in your browser.
 4. Click **Analyze** and wait for the pipeline log to finish
 
 When analysis completes, the **Speaker panel** appears — one row per detected speaker (up to 6). Each row shows:
-- A short audio sample of that speaker
-- **Voice mode**: Clone (use voice from the video), Saved (a voice you previously saved to the library), or Library (any Fish Audio voice ID)
-- **Voice name / ID** field (for Saved or Library modes)
+- A short audio sample of that speaker (the aggregated reference clip)
+- An embedding hint if a close match was found in your saved voice library
+- A **Voice mode** radio with four options:
+
+| Mode | What it does |
+|---|---|
+| **Auto-clone (from video)** | Clones the speaker's voice from audio extracted during Analyze. Default. |
+| **Use saved voice** | Picks a voice you previously saved from an earlier run. |
+| **Use library voice ID** | Pastes any Fish Audio public voice ID directly. |
+| **Upload custom sample** | Uploads your own audio file — bypasses all extraction, uses exactly what you provide. Takes priority over everything else. |
+
+If ECAPA-TDNN embeddings found a close match to a saved voice (similarity ≥ 0.75), the mode is pre-filled to "Use saved voice" automatically.
 
 Adjust voice assignments if needed, then proceed to Stage 2.
 
@@ -238,11 +247,20 @@ dub/
 ## Notes & limitations
 
 - Best results with clean audio: minimal background noise
-- Very short segments (< 1 second) may produce lower-quality TTS
-- Time-fitting uses `atempo` (0.85–1.15× range) with trim/pad outside that range; iterative retranslation tries to keep segments in range before clamping
+- Very short TTS output segments (< 1 second) may sound slightly robotic — this is a Fish Audio constraint, not a pipeline one
+- Time-fitting uses `atempo` (0.85–1.15× range) with trim/pad outside that range; iterative retranslation tries to bring segments into range before clamping
 - WhisperX first run downloads model weights (~1–3 GB depending on model size); subsequent runs use the cache
 - Speaker diarization in WhisperX requires `HF_TOKEN` — without it all speech is treated as one speaker
 - The ECAPA-TDNN embedding model (`speechbrain/spkrec-ecapa-voxceleb`) downloads ~100 MB on first use
 - Demucs first run downloads ~200 MB of model weights; subsequent runs use the cache
 - Up to 6 speakers are shown in the speaker panel; videos with more speakers use the first 6 detected
 - Energy analysis (loud/quiet tagging) runs per-speaker so volume differences between speakers don't affect classification
+
+**Voice reference extraction:**
+- Fragments as short as 0.1 s are included in the aggregated reference — short utterances like "yes", "ok", "hmm" carry usable voice timbre and add up across back-and-forth dialogue. Only genuine near-zero artefacts (< 0.1 s) are discarded.
+- The pipeline log reports per-speaker aggregated totals so you can verify accumulation on realistic content, e.g.:
+  ```
+  SPEAKER_00: 12.0s reference clip (42 fragments, 18.7s total — target reached)
+  SPEAKER_01: 4.2s reference clip (11 fragments, 4.2s total available)
+  ```
+- If a speaker's total falls below `MIN_REF_DURATION_SECS` (default 6 s) even after aggregating the whole clip, the fallback chain is: `FALLBACK_VOICE_ID` (if set) → clone anyway with a quality warning. The "Upload custom sample" option in the speaker panel bypasses all of this — use it when you have a clean external recording of the speaker.
