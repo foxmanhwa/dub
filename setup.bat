@@ -222,6 +222,31 @@ echo.
 echo  [OK] All dependencies installed.
 echo.
 
+REM -- 5b. Pre-download WhisperX model ──────────────────────────────────────
+echo  Pre-downloading WhisperX model weights (avoids a silent wait on first use)...
+echo  (This may take a few minutes on first run.)
+echo.
+echo import torch > "%TEMP%\_dub_wx.py"
+echo d = "cuda" if torch.cuda.is_available() else "cpu" >> "%TEMP%\_dub_wx.py"
+echo import os >> "%TEMP%\_dub_wx.py"
+echo default = "large-v2" if d == "cuda" else "small" >> "%TEMP%\_dub_wx.py"
+echo m = os.environ.get("WHISPERX_MODEL", default) >> "%TEMP%\_dub_wx.py"
+echo ct = "float16" if d == "cuda" else "int8" >> "%TEMP%\_dub_wx.py"
+echo print(f"  Downloading Whisper '{m}' for {d}...") >> "%TEMP%\_dub_wx.py"
+echo import whisperx >> "%TEMP%\_dub_wx.py"
+echo whisperx.load_model(m, d, compute_type=ct) >> "%TEMP%\_dub_wx.py"
+echo print(f"  [OK] Whisper '{m}' cached.") >> "%TEMP%\_dub_wx.py"
+python "%TEMP%\_dub_wx.py"
+if errorlevel 1 (
+    echo.
+    echo  [WARN] WhisperX model pre-download failed -- it will download on first use instead.
+    echo         Or set ASR_BACKEND=fish in .env to use Fish Audio cloud ASR.
+    echo.
+) else (
+    echo.
+)
+del "%TEMP%\_dub_wx.py" 2>nul
+
 REM -- 6. API keys ---------------------------------------------------------------
 echo ======================================================
 echo   API Key Setup

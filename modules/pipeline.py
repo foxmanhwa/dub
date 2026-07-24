@@ -159,14 +159,17 @@ def run_pipeline(
     _asr_backend = os.environ.get("ASR_BACKEND", "whisperx").lower()
     if _asr_backend == "whisperx":
         yield "Transcribing with WhisperX (local model)…"
-        if os.environ.get("HF_TOKEN"):
-            yield "  HF_TOKEN present — speaker diarization will run inside WhisperX."
-        else:
-            yield "  No HF_TOKEN — speaker diarization skipped (set HF_TOKEN to enable)."
     else:
         yield "Transcribing with Fish Audio ASR…"
     lang = source_language if source_language and source_language != "auto" else None
-    asr_result = transcribe(vocals_wav, language=lang)
+    asr_result: dict | None = None
+    for _asr_item in transcribe(vocals_wav, language=lang):
+        if isinstance(_asr_item, str):
+            yield _asr_item
+        else:
+            asr_result = _asr_item
+    if asr_result is None:
+        raise RuntimeError("ASR returned no result.")
     segments = asr_result.get("segments", [])
     total_duration = asr_result.get("duration") or get_duration(video_path)
 
@@ -771,13 +774,18 @@ def analyze_video(
     _asr_backend = os.environ.get("ASR_BACKEND", "whisperx").lower()
     if _asr_backend == "whisperx":
         yield "Transcribing with WhisperX (local model)…"
-        yield ("  HF_TOKEN present — diarization enabled." if os.environ.get("HF_TOKEN")
-               else "  No HF_TOKEN — diarization skipped inside WhisperX.")
     else:
         yield "Transcribing with Fish Audio ASR…"
 
     lang = source_language if source_language and source_language != "auto" else None
-    asr_result = transcribe(vocals_wav, language=lang)
+    asr_result: dict | None = None
+    for _asr_item in transcribe(vocals_wav, language=lang):
+        if isinstance(_asr_item, str):
+            yield _asr_item
+        else:
+            asr_result = _asr_item
+    if asr_result is None:
+        raise RuntimeError("ASR returned no result.")
     segments = asr_result.get("segments", [])
     total_duration = asr_result.get("duration") or get_duration(video_path)
 

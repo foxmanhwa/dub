@@ -193,6 +193,25 @@ echo
 echo "  [OK] All dependencies installed."
 echo
 
+# ── 5b. Pre-download WhisperX model ──────────────────────────────────────────
+echo "  Pre-downloading WhisperX model weights (avoids a silent wait on first use)..."
+"$PY_CMD" - << 'PYEOF'
+try:
+    import os, torch
+    d = "cuda" if torch.cuda.is_available() else "cpu"
+    m = os.environ.get("WHISPERX_MODEL", "large-v2" if d == "cuda" else "small")
+    ct = "float16" if d == "cuda" else "int8"
+    print(f"  Downloading Whisper '{m}' for {d}...")
+    import whisperx
+    whisperx.load_model(m, d, compute_type=ct)
+    print(f"  [OK] Whisper '{m}' cached.")
+except Exception as e:
+    print(f"  [WARN] WhisperX model pre-download failed: {e}")
+    print("  It will download on first use instead.")
+    print("  Or set ASR_BACKEND=fish in .env to use Fish Audio cloud ASR.")
+PYEOF
+echo
+
 # ── 6. API keys ───────────────────────────────────────────────────────────────
 
 echo "======================================================"
