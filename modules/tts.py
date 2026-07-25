@@ -131,29 +131,39 @@ def synthesize_segments(
                 else "both original text and translation are empty"
             )
             print(f"[TTS skip] seg {i}: {reason}")
-            result.append({**seg, "tts_path": None, "tts_error": f"empty translation — {reason}"})
+            result.append({**seg, "tts_path": None, "tts_error": f"empty translation — {reason}", "tts_ref_key": "skipped"})
             continue
 
-        # Per-speaker reference lookup
+        # Per-speaker reference lookup — try energy-tier match first, then base speaker
         seg_ref_bytes = reference_audio_bytes
         seg_ref_text = reference_text
         seg_ref_id = reference_id
+        _used_ref_key = "global"
         if speaker_references:
             speaker = seg.get("speaker")
-            if speaker and speaker in speaker_references:
-                spk_bytes, spk_text, spk_id = speaker_references[speaker]
-                if spk_id is not None:
-                    # Library voice fallback for this speaker
-                    seg_ref_id = spk_id
-                    seg_ref_bytes = None
-                    seg_ref_text = ""
+            energy = seg.get("energy", "normal")
+            if speaker:
+                tier_key = f"{speaker}:{energy}"
+                _lookup = (
+                    tier_key if tier_key in speaker_references else
+                    speaker if speaker in speaker_references else
+                    None
+                )
+                if _lookup:
+                    spk_bytes, spk_text, spk_id = speaker_references[_lookup]
+                    _used_ref_key = _lookup
+                    if spk_id is not None:
+                        seg_ref_id = spk_id
+                        seg_ref_bytes = None
+                        seg_ref_text = ""
+                    else:
+                        seg_ref_bytes = spk_bytes
+                        seg_ref_text = spk_text
+                        seg_ref_id = None
+                    if _lookup == tier_key:
+                        print(f"[TTS] seg {i}: energy-matched ref {tier_key!r}")
                 else:
-                    # Instant clone for this speaker
-                    seg_ref_bytes = spk_bytes
-                    seg_ref_text = spk_text
-                    seg_ref_id = None
-            elif speaker:
-                print(f"[TTS] seg {i}: speaker {speaker!r} not in speaker_references — using global ref")
+                    print(f"[TTS] seg {i}: speaker {speaker!r} not in speaker_references — using global ref")
 
         try:
             current_text = text
@@ -216,9 +226,10 @@ def synthesize_segments(
                 "tts_path": str(path),
                 "translated_text": current_text,
                 "fit_retries": fit_retries,
+                "tts_ref_key": _used_ref_key,
             })
         except Exception as exc:
             print(f"[TTS error] seg {i}: {exc!r}  text={text!r}")
-            result.append({**seg, "tts_path": None, "tts_error": str(exc), "fit_retries": 0})
+            result.append({**seg, "tts_path": None, "tts_error": str(exc), "fit_retries": 0, "tts_ref_key": _used_ref_key})
 
     return result
