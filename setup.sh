@@ -153,7 +153,7 @@ elif command -v nvidia-smi &>/dev/null; then
     GPU_FOUND=1
     echo "  [OK] NVIDIA GPU detected! Installing CUDA-enabled PyTorch (CUDA 12.8 — supports Blackwell RTX 5000 series)..."
     echo
-    pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu128
+    pip install torch "torchaudio==2.8.0" --index-url https://download.pytorch.org/whl/cu128
 
     echo "  Verifying GPU kernel dispatch..."
     if python3 -c "import torch; torch.zeros(1,device='cuda')+torch.zeros(1,device='cuda')" 2>/dev/null; then

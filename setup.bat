@@ -113,7 +113,7 @@ REM === NVIDIA GPU FOUND =======================================================
 set GPU_FOUND=1
 echo  Installing CUDA-enabled PyTorch (CUDA 12.8 -- supports Blackwell RTX 5000 series^)...
 echo.
-pip install --upgrade torch torchaudio --index-url https://download.pytorch.org/whl/cu128
+pip install --upgrade torch "torchaudio==2.8.0" --index-url https://download.pytorch.org/whl/cu128
 echo.
 
 REM -- Verify the CUDA build actually installed (pip can silently downgrade)
@@ -122,7 +122,7 @@ python -c "import torch; ok='+cu' in torch.__version__; print('  torch', torch._
 if errorlevel 1 (
     echo.
     echo  WARNING: pip installed a CPU-only PyTorch. Forcing CUDA reinstall...
-    pip install --upgrade --force-reinstall torch torchaudio --index-url https://download.pytorch.org/whl/cu128
+    pip install --upgrade --force-reinstall torch "torchaudio==2.8.0" --index-url https://download.pytorch.org/whl/cu128
     python -c "import torch; print('  torch', torch.__version__, '-- CUDA available:', torch.cuda.is_available())"
 )
 echo.
@@ -231,7 +231,7 @@ if "!GPU_FOUND!"=="1" (
     if errorlevel 1 (
         echo.
         echo  [WARN] requirements.txt overwrote PyTorch with a CPU build. Reinstalling CUDA build...
-        pip install --upgrade --force-reinstall torch torchaudio --index-url https://download.pytorch.org/whl/cu128
+        pip install --upgrade --force-reinstall torch "torchaudio==2.8.0" --index-url https://download.pytorch.org/whl/cu128
     )
 )
 echo.
