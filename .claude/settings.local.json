@@ -72,7 +72,9 @@
       "Bash(.venv\\\\Scripts\\\\python.exe app.py)",
       "Read(//tmp/**)",
       "PowerShell(taskkill *)",
-      "Bash(echo \"exit: $?\")"
+      "Bash(echo \"exit: $?\")",
+      "WebSearch",
+      "WebFetch(domain:fish.audio)"
     ]
   }
 }
