@@ -74,7 +74,8 @@
       "PowerShell(taskkill *)",
       "Bash(echo \"exit: $?\")",
       "WebSearch",
-      "WebFetch(domain:fish.audio)"
+      "WebFetch(domain:fish.audio)",
+      "Bash(xargs grep *)"
     ]
   }
 }
