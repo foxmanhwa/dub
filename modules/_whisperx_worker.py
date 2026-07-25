@@ -53,11 +53,35 @@ def _log(msg: str) -> None:
     print(msg, file=sys.stderr, flush=True)
 
 
+def _probe_device() -> str:
+    """
+    Return "cuda" if available AND this PyTorch build can dispatch kernels on
+    the detected GPU.  Falls back to "cpu" on any CUDA error so the pipeline
+    never hard-crashes due to a compute-capability mismatch (e.g. Blackwell
+    sm_120 with a cu121 build that only supports up to sm_90).
+    """
+    import torch
+    if not torch.cuda.is_available():
+        return "cpu"
+    try:
+        _ = torch.zeros(1, device="cuda") + torch.zeros(1, device="cuda")
+        return "cuda"
+    except RuntimeError as exc:
+        _log(
+            f"[whisperx] CUDA kernel dispatch failed: {exc}\n"
+            "  Falling back to CPU — transcription will be slower.\n"
+            "  To fix: reinstall PyTorch with a newer CUDA build:\n"
+            "    pip install torch torchaudio "
+            "--index-url https://download.pytorch.org/whl/cu128"
+        )
+        return "cpu"
+
+
 def _run(audio_path: str, result_path: str, language: str | None) -> None:
     import torch
     import whisperx
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = _probe_device()
     compute_type = "float16" if device == "cuda" else "int8"
 
     # CPU default is "small" — large-v2 on CPU can take 30+ minutes for a short

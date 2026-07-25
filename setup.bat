@@ -111,9 +111,9 @@ goto :no_gpu
 REM === NVIDIA GPU FOUND ========================================================
 :gpu_detected
 set GPU_FOUND=1
-echo  Installing CUDA-enabled PyTorch (CUDA 12.1^)...
+echo  Installing CUDA-enabled PyTorch (CUDA 12.8 -- supports Blackwell RTX 5000 series^)...
 echo.
-pip install --upgrade torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+pip install --upgrade torch torchaudio --index-url https://download.pytorch.org/whl/cu128
 echo.
 
 REM -- Verify the CUDA build actually installed (pip can silently downgrade)
@@ -122,8 +122,24 @@ python -c "import torch; ok='+cu' in torch.__version__; print('  torch', torch._
 if errorlevel 1 (
     echo.
     echo  WARNING: pip installed a CPU-only PyTorch. Forcing CUDA reinstall...
-    pip install --upgrade --force-reinstall torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+    pip install --upgrade --force-reinstall torch torchaudio --index-url https://download.pytorch.org/whl/cu128
     python -c "import torch; print('  torch', torch.__version__, '-- CUDA available:', torch.cuda.is_available())"
+)
+echo.
+
+REM -- Verify this build can actually dispatch kernels on the detected GPU
+REM    (catches compute-capability mismatches, e.g. sm_120 Blackwell on an old cu build)
+echo  Verifying GPU kernel dispatch...
+python -c "import torch; torch.zeros(1,device='cuda')+torch.zeros(1,device='cuda'); print('  [OK] GPU kernel dispatch works -- CUDA acceleration active')"
+if errorlevel 1 (
+    echo.
+    echo  WARNING: CUDA build installed but kernel dispatch failed for your GPU.
+    echo           !GPU_NAME!
+    echo           This usually means your GPU is newer than this PyTorch CUDA build supports.
+    echo           The app will fall back to CPU automatically -- everything still works,
+    echo           just slower. If you want GPU acceleration, try:
+    echo             pip install --upgrade torch torchaudio --index-url https://download.pytorch.org/whl/cu128
+    echo.
 )
 echo.
 
@@ -215,7 +231,7 @@ if "!GPU_FOUND!"=="1" (
     if errorlevel 1 (
         echo.
         echo  [WARN] requirements.txt overwrote PyTorch with a CPU build. Reinstalling CUDA build...
-        pip install --upgrade --force-reinstall torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+        pip install --upgrade --force-reinstall torch torchaudio --index-url https://download.pytorch.org/whl/cu128
     )
 )
 echo.

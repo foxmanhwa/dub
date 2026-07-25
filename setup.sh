@@ -151,9 +151,22 @@ if [ "$OS" = "Darwin" ]; then
 
 elif command -v nvidia-smi &>/dev/null; then
     GPU_FOUND=1
-    echo "  [OK] NVIDIA GPU detected! Installing CUDA-enabled PyTorch (CUDA 12.1)..."
+    echo "  [OK] NVIDIA GPU detected! Installing CUDA-enabled PyTorch (CUDA 12.8 — supports Blackwell RTX 5000 series)..."
     echo
-    pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+    pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu128
+
+    echo "  Verifying GPU kernel dispatch..."
+    if python3 -c "import torch; torch.zeros(1,device='cuda')+torch.zeros(1,device='cuda')" 2>/dev/null; then
+        echo "  [OK] GPU kernel dispatch works — CUDA acceleration active."
+    else
+        echo
+        echo "  WARNING: CUDA build installed but kernel dispatch failed for your GPU."
+        echo "           Your GPU may be newer than this PyTorch CUDA build supports."
+        echo "           The app will fall back to CPU automatically — everything still"
+        echo "           works, just slower. To force GPU support:"
+        echo "             pip install --upgrade torch torchaudio --index-url https://download.pytorch.org/whl/cu128"
+        echo
+    fi
     echo
     echo "  --------------------------------------------------------"
     echo "   LOCAL TRANSLATION (optional)"
