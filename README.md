@@ -88,10 +88,10 @@ pip install -r requirements.txt
 
 **WhisperX note:** WhisperX uses `faster-whisper` under the hood. On NVIDIA GPUs, install the CUDA-enabled PyTorch before running `pip install -r requirements.txt`:
 ```bash
-pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu128
+pip install torch "torchaudio==2.8.0" --index-url https://download.pytorch.org/whl/cu128
 pip install -r requirements.txt
 ```
-The `setup.bat` / `setup.sh` scripts handle this automatically. The CUDA 12.8 build supports GPUs from Maxwell through Blackwell (sm_52–sm_120), including RTX 50-series.
+The `setup.bat` / `setup.sh` scripts handle this automatically. The CUDA 12.8 build supports GPUs from Maxwell through Blackwell (sm_52–sm_120), including RTX 50-series. torchaudio is pinned to 2.8.x — 2.9+ removes APIs that pyannote.audio and whisperx depend on.
 
 ### 3. API keys
 
@@ -251,14 +251,16 @@ dub/
 
 If you have an NVIDIA GPU but the pipeline runs on CPU, or you see `CUDA error: no kernel image is available for execution on the device`, your PyTorch build doesn't support your GPU's compute capability. This most commonly affects newer GPUs (RTX 50-series / Blackwell, sm_120).
 
-Fix — reinstall PyTorch with the CUDA 12.8 build:
+Fix — reinstall with the CUDA 12.8 build, pinned to torchaudio 2.8.0:
 ```bash
-pip install --upgrade torch torchaudio --index-url https://download.pytorch.org/whl/cu128
+pip install --upgrade torch "torchaudio==2.8.0" --index-url https://download.pytorch.org/whl/cu128
 ```
 
-The app handles this gracefully: if the kernel dispatch test fails at startup, WhisperX and Demucs both fall back to CPU automatically with a log message explaining the issue. Nothing crashes — it just runs slower until you do the reinstall.
+torchaudio must stay on 2.8.x — version 2.9+ removes the `AudioMetaData` API that pyannote.audio depends on, and violates whisperx's own `torchaudio~=2.8.0` constraint. The cu128 build of torchaudio 2.8.0 satisfies both Blackwell GPU support and the API compatibility requirement simultaneously.
 
-The setup scripts already install the cu128 build. This only affects machines that ran `setup.bat` / `setup.sh` before this fix was shipped.
+The app handles CUDA arch mismatches gracefully: if the kernel dispatch test fails at startup, WhisperX falls back to CPU automatically with a log message explaining the issue. Nothing crashes — it just runs slower until you do the reinstall.
+
+The setup scripts already install the correct pinned version. This only affects machines that ran `setup.bat` / `setup.sh` before this fix was shipped.
 
 ---
 

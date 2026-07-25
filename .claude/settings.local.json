@@ -75,7 +75,14 @@
       "Bash(echo \"exit: $?\")",
       "WebSearch",
       "WebFetch(domain:fish.audio)",
-      "Bash(xargs grep *)"
+      "Bash(xargs grep *)",
+      "WebFetch(domain:discuss.huggingface.co)",
+      "Bash(python3 -c \" import json, sys tags = json.load\\(sys.stdin\\) for t in tags: print\\(t['name']\\) \")",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(d\\)\")",
+      "Bash(gh api *)",
+      "Bash(grep -E \"^v2\\\\.[0-9]+\\\\.0$\")",
+      "Bash(python3 -c \"import json,sys; items=json.load\\(sys.stdin\\); [print\\(i['path'], i.get\\('url',''\\)\\) for i in items]\")",
+      "WebFetch(domain:docs.pytorch.org)"
     ]
   }
 }
