@@ -16,7 +16,9 @@ demucs>=4.0.0
 # ASR — WhisperX (default backend; uses faster-whisper + pyannote for diarization)
 # Install torch first for your platform: https://pytorch.org/get-started/locally/
 # Then:
-whisperx>=3.1.0
+# whisperx>=3.8.0: 3.8.x is when pyannote calls switched from use_auth_token= to token=.
+# Older versions paired with pyannote.audio>=4.0.0 raise TypeError on that removed kwarg.
+whisperx>=3.8.0
 
 # Phase B — overlapping-speaker handling
 # pyannote and torchaudio are already pulled in as whisperx transitive deps,
