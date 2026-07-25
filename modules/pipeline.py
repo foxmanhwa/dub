@@ -25,6 +25,7 @@ from .audio_assembly import (
     extract_audio,
     extract_reference_clip,
     extract_speaker_reference_clips,
+    extract_speaker_tier_reference_clips,
     assemble_audio_track,
     mux_audio_into_video,
     get_duration,
@@ -856,8 +857,21 @@ def analyze_video(
         except Exception:
             pass
 
+    # ── Energy tagging ────────────────────────────────────────────────────────
+    # Run before reference extraction so tier refs use already-classified segments.
+    try:
+        from .energy import tag_segments_with_energy
+        segments = tag_segments_with_energy(vocals_wav, segments)
+        n_loud = sum(1 for s in segments if s.get("energy") == "loud")
+        n_quiet = sum(1 for s in segments if s.get("energy") == "quiet")
+        if n_loud or n_quiet:
+            yield f"Energy analysis: {n_loud} loud, {n_quiet} soft/whispered segment(s) tagged."
+    except Exception as _e_exc:
+        yield f"Energy tagging failed ({_e_exc}) — using neutral tone for all segments."
+
     # ── Extract speaker reference clips ───────────────────────────────────────
     speaker_ref_wavs: dict[str, str] = {}
+    speaker_tier_ref_wavs: dict[str, str] = {}
     detected_speakers = {s.get("speaker", "SPEAKER_00") for s in segments}
     use_per_speaker = len(detected_speakers) > 1 and bool(dia_segments)
 
@@ -887,16 +901,24 @@ def analyze_video(
         speaker_ref_wavs["SPEAKER_00"] = _ref_wav
         yield "Voice reference ready."
 
-    # ── Energy tagging (for emotion-aware translation) ────────────────────────
+    # ── Per-energy-tier reference clips ───────────────────────────────────────
+    # Build separate reference WAVs per (speaker, energy) so "yelling" lines clone
+    # from yelling samples and "calm" lines clone from calm samples.
     try:
-        from .energy import tag_segments_with_energy
-        segments = tag_segments_with_energy(vocals_wav, segments)
-        n_loud = sum(1 for s in segments if s.get("energy") == "loud")
-        n_quiet = sum(1 for s in segments if s.get("energy") == "quiet")
-        if n_loud or n_quiet:
-            yield f"Energy analysis: {n_loud} loud, {n_quiet} soft/whispered segment(s) tagged."
-    except Exception as _e_exc:
-        yield f"Energy tagging failed ({_e_exc}) — using neutral tone for all segments."
+        _tier_results = extract_speaker_tier_reference_clips(
+            vocals_wav,
+            segments,
+            work_dir=str(work / "speaker_refs"),
+            target_duration=REFERENCE_CLIP_DURATION,
+            overlap_regions=overlap_regions,
+        )
+        if _tier_results:
+            yield f"Energy-tier references: {len(_tier_results)} tier(s) built."
+            for _tk, (_tw, _tdur, _tnf, _traw) in _tier_results.items():
+                speaker_tier_ref_wavs[_tk] = _tw
+                yield f"  {_tk}: {_tdur:.1f}s ({_tnf} fragment(s))"
+    except Exception as _te:
+        yield f"Tier reference extraction failed ({_te}) — all segments will use base speaker reference."
 
     # ── Speaker embedding analysis ────────────────────────────────────────────
     embedding_suggestions: dict[str, tuple] = {}
@@ -942,6 +964,7 @@ def analyze_video(
         "overlap_regions": overlap_regions,
         "total_duration": total_duration,
         "speaker_ref_wavs": speaker_ref_wavs,
+        "speaker_tier_ref_wavs": speaker_tier_ref_wavs,
         "_whisperx_diarized": _whisperx_diarized,
         "embedding_suggestions": dict(embedding_suggestions),
     }
@@ -978,6 +1001,7 @@ def generate_from_analysis(
     overlap_regions = analysis.get("overlap_regions", [])
     total_duration = analysis["total_duration"]
     speaker_ref_wavs = analysis.get("speaker_ref_wavs", {})
+    speaker_tier_ref_wavs = analysis.get("speaker_tier_ref_wavs", {})
 
     ollama_model = os.environ.get("OLLAMA_MODEL", "llama3.2:latest")
     _min_ref_dur = min_ref_duration if min_ref_duration is not None else MIN_REF_DURATION
@@ -1094,7 +1118,17 @@ def generate_from_analysis(
                 _rb, _ = build_voice_reference(_wp)
                 _rt = " ".join(s["text"] for s in segments if s.get("speaker") == spk)[:MAX_REFERENCE_TEXT_CHARS]
                 speaker_references[spk] = (_rb, _rt, None)
-                yield f"  {spk} → cloned from video"
+                # Per-energy-tier references for this speaker
+                _tier_added = []
+                for _tk, _tw in speaker_tier_ref_wavs.items():
+                    if _tk.startswith(f"{spk}:") and Path(_tw).exists():
+                        _trb, _ = build_voice_reference(_tw)
+                        speaker_references[_tk] = (_trb, _rt, None)
+                        _tier_added.append(_tk.split(":", 1)[1])
+                if _tier_added:
+                    yield f"  {spk} → cloned from video + tier refs: {', '.join(_tier_added)}"
+                else:
+                    yield f"  {spk} → cloned from video"
             elif _fallback_vid:
                 speaker_references[spk] = (None, "", _fallback_vid)
                 yield f"  {spk} → no clip, using fallback voice '{_fallback_vid}'"
@@ -1131,19 +1165,32 @@ def generate_from_analysis(
                 except Exception:
                     _dur = _min_ref_dur  # assume OK if we can't check
 
+                _rt = " ".join(s["text"] for s in segments if s.get("speaker") == spk)[:MAX_REFERENCE_TEXT_CHARS]
                 if _dur >= _min_ref_dur:
                     _rb, _ = build_voice_reference(_wp)
-                    _rt = " ".join(s["text"] for s in segments if s.get("speaker") == spk)[:MAX_REFERENCE_TEXT_CHARS]
                     speaker_references[spk] = (_rb, _rt, None)
-                    yield f"  {spk}: {_dur:.1f}s [cloning]"
+                    _tier_added = []
+                    for _tk, _tw in speaker_tier_ref_wavs.items():
+                        if _tk.startswith(f"{spk}:") and Path(_tw).exists():
+                            _trb, _ = build_voice_reference(_tw)
+                            speaker_references[_tk] = (_trb, _rt, None)
+                            _tier_added.append(_tk.split(":", 1)[1])
+                    _tier_note = f" + tiers: {', '.join(_tier_added)}" if _tier_added else ""
+                    yield f"  {spk}: {_dur:.1f}s [cloning{_tier_note}]"
                 elif _fallback_vid:
                     speaker_references[spk] = (None, "", _fallback_vid)
                     yield f"  {spk}: {_dur:.1f}s too short → fallback '{_fallback_vid}'"
                 else:
                     _rb, _ = build_voice_reference(_wp)
-                    _rt = " ".join(s["text"] for s in segments if s.get("speaker") == spk)[:MAX_REFERENCE_TEXT_CHARS]
                     speaker_references[spk] = (_rb, _rt, None)
-                    yield f"  {spk}: {_dur:.1f}s [short — cloning anyway]"
+                    _tier_added = []
+                    for _tk, _tw in speaker_tier_ref_wavs.items():
+                        if _tk.startswith(f"{spk}:") and Path(_tw).exists():
+                            _trb, _ = build_voice_reference(_tw)
+                            speaker_references[_tk] = (_trb, _rt, None)
+                            _tier_added.append(_tk.split(":", 1)[1])
+                    _tier_note = f" + tiers: {', '.join(_tier_added)}" if _tier_added else ""
+                    yield f"  {spk}: {_dur:.1f}s [short — cloning anyway{_tier_note}]"
 
             if speaker_ref_wavs:
                 _p_spk = max(speaker_ref_wavs, key=lambda k: Path(speaker_ref_wavs[k]).stat().st_size
@@ -1275,6 +1322,21 @@ def generate_from_analysis(
     for i, s in enumerate(segments):
         if not s.get("tts_path"):
             yield f"  WARNING seg {i}: {s.get('tts_error', 'unknown')} | {s.get('text', '')!r}"
+
+    # Log which reference tier was used per speaker — shows energy-matched vs fallback
+    if speaker_tier_ref_wavs:
+        from collections import Counter as _Counter
+        _ref_usage = _Counter(
+            s.get("tts_ref_key", "global") for s in segments if s.get("tts_path")
+        )
+        _tier_hits = sorted((k, v) for k, v in _ref_usage.items() if ":" in k)
+        _base_hits = sum(v for k, v in _ref_usage.items() if ":" not in k and k not in ("global", "skipped"))
+        if _tier_hits:
+            yield "  Energy-tier reference usage:"
+            for _rk, _rn in _tier_hits:
+                yield f"    {_rk}: {_rn} segment(s)"
+        if _base_hits:
+            yield f"  {_base_hits} segment(s) used base speaker reference (no matching tier)"
 
     if processed_overlaps:
         for proc in processed_overlaps:

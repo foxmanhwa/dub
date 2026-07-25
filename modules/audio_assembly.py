@@ -13,6 +13,11 @@ from pathlib import Path
 _ATEMPO_MIN = 0.5
 _ATEMPO_MAX = 2.0
 
+# Minimum seconds of material in one energy tier to bother building a separate
+# per-tier reference clip.  Below this threshold the tier is skipped and TTS
+# falls back to the base per-speaker reference.
+MIN_TIER_DURATION = 3.0
+
 # Maximum stretch we're willing to apply before preferring trim/pad over distortion.
 # Iterative retranslation tries to bring segments inside this range first; whatever
 # remains after retries is clamped here rather than stretched beyond recognition.
@@ -195,6 +200,121 @@ def extract_speaker_reference_clips(
 
         actual_dur = min(accumulated, target_duration)
         result[speaker] = (ref_path, actual_dur, len(selected), accumulated)
+
+    return result
+
+
+def extract_speaker_tier_reference_clips(
+    audio_path: str,
+    segments: list[dict],
+    work_dir: str,
+    target_duration: float = 12.0,
+    min_tier_duration: float = MIN_TIER_DURATION,
+    overlap_regions: list[dict] | None = None,
+) -> dict[str, tuple[str, float, int, float]]:
+    """
+    Build a separate reference WAV for each (speaker, energy-tier) combination.
+
+    segments must already have "speaker" and "energy" fields — call
+    tag_segments_with_energy() before this function.
+
+    A tier reference is only built when that tier contributes at least
+    min_tier_duration seconds of material; tiers with less are skipped so callers
+    fall back to the plain per-speaker reference.
+
+    Returns {"{speaker}:{tier}": (wav_path, clipped_dur, n_fragments, raw_total)}.
+    Example keys: "SPEAKER_00:loud", "SPEAKER_00:normal", "SPEAKER_01:quiet".
+    """
+    work = Path(work_dir)
+    work.mkdir(parents=True, exist_ok=True)
+
+    overlap_spans: list[tuple[float, float]] = []
+    for r in (overlap_regions or []):
+        overlap_spans.append((r["start"], r["end"]))
+
+    def _in_overlap(start: float, end: float) -> bool:
+        for os, oe in overlap_spans:
+            if start < oe and end > os:
+                return True
+        return False
+
+    # Group segments by "speaker:tier" key
+    by_tier: dict[str, list[dict]] = {}
+    for seg in segments:
+        spk = seg.get("speaker", "SPEAKER_00")
+        tier = seg.get("energy", "normal")
+        dur = seg["end"] - seg["start"]
+        if dur < 0.1 or _in_overlap(seg["start"], seg["end"]):
+            continue
+        by_tier.setdefault(f"{spk}:{tier}", []).append(seg)
+
+    result: dict[str, tuple[str, float, int, float]] = {}
+
+    for key, segs in by_tier.items():
+        raw_total = sum(s["end"] - s["start"] for s in segs)
+        if raw_total < min_tier_duration:
+            continue
+
+        spk, tier = key.split(":", 1)
+
+        # Longest segments first, accumulate up to target_duration
+        segs_sorted = sorted(segs, key=lambda s: s["end"] - s["start"], reverse=True)
+        selected: list[dict] = []
+        accumulated = 0.0
+        for seg in segs_sorted:
+            selected.append(seg)
+            accumulated += seg["end"] - seg["start"]
+            if accumulated >= target_duration:
+                break
+
+        if not selected:
+            continue
+
+        chunk_paths: list[str] = []
+        for ci, seg in enumerate(selected):
+            chunk_path = str(work / f"{spk}_{tier}_chunk_{ci:02d}.wav")
+            seg_dur = seg["end"] - seg["start"]
+            _run([
+                "ffmpeg", "-y", "-i", audio_path,
+                "-ss", f"{seg['start']:.3f}", "-t", f"{seg_dur:.3f}",
+                "-ar", "44100", "-ac", "1",
+                chunk_path,
+            ])
+            chunk_paths.append(chunk_path)
+
+        if not chunk_paths:
+            continue
+
+        ref_path = str(work / f"{spk}_{tier}_reference.wav")
+        if len(chunk_paths) == 1:
+            os.replace(chunk_paths[0], ref_path)
+        else:
+            concat_list = str(work / f"{spk}_{tier}_concat.txt")
+            with open(concat_list, "w") as f:
+                for p in chunk_paths:
+                    f.write(f"file '{p}'\n")
+            _run([
+                "ffmpeg", "-y",
+                "-f", "concat", "-safe", "0",
+                "-i", concat_list,
+                "-ar", "44100", "-ac", "1",
+                ref_path,
+            ])
+            for p in chunk_paths:
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+
+        norm_path = str(work / f"{spk}_{tier}_reference_norm.wav")
+        try:
+            normalize_reference_clip(ref_path, norm_path)
+            os.replace(norm_path, ref_path)
+        except Exception:
+            pass
+
+        actual_dur = min(accumulated, target_duration)
+        result[key] = (ref_path, actual_dur, len(selected), raw_total)
 
     return result
 
