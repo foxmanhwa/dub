@@ -225,7 +225,8 @@ if [ -f .env ]; then
     echo
 else
     echo "  [1] FISH_AUDIO_API_KEY  (required)"
-    echo "      Handles transcription and voice-cloned TTS."
+    echo "      Used for voice-cloned TTS (free s2.1-pro-free model — zero cost by default)."
+    echo "      Free signup, no payment method required."
     echo "      Sign up at: https://fish.audio  ->  Dashboard -> API Keys"
     echo
     read -rp "  Enter Fish Audio API key: " FISH_KEY

@@ -20,7 +20,7 @@ The script installs everything, detects your GPU, prompts for API keys, and laun
 
 A Gradio web app that redubs single- and multi-speaker videos into a target language using:
 - **WhisperX** — local ASR with word-level timestamps + speaker diarization in one pass (default; Fish Audio cloud API is the fallback)
-- **Fish Audio** — TTS with instant voice cloning or library voices
+- **Fish Audio** — TTS with instant voice cloning or library voices (free `s2.1-pro-free` model by default — zero cost when ASR_BACKEND=whisperx)
 - **Groq** — fast, free-tier translation (default; Gemini and Ollama are fallbacks)
 - **Ollama** — fully-local, offline translation (optional)
 - **Demucs** — vocal/music stem separation to preserve background music
@@ -109,7 +109,7 @@ GROQ_API_KEY=your_groq_api_key_here
 # HF_TOKEN=hf_...
 ```
 
-- **Fish Audio API key**: sign up at [fish.audio](https://fish.audio) → Dashboard → API Keys
+- **Fish Audio API key**: free signup at [fish.audio](https://fish.audio) → Dashboard → API Keys — **no payment method required, no balance needed**. When using the default `ASR_BACKEND=whisperx`, Fish Audio is only called for TTS and uses the free `s2.1-pro-free` model, so your usage cost is $0.
 - **Groq API key**: free at [console.groq.com](https://console.groq.com) — no billing required
 - **HF_TOKEN**: needed for WhisperX speaker diarization. Create a token at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens), then accept model terms at [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) and [pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0). Without this, WhisperX still transcribes but all audio is treated as a single speaker.
 
@@ -169,7 +169,8 @@ The segment table lets you review and fix the dub without re-running the full pi
 
 | Env var | Default | Description |
 |---|---|---|
-| `FISH_AUDIO_API_KEY` | — | **Required.** Fish Audio API key (TTS + fallback ASR) |
+| `FISH_AUDIO_API_KEY` | — | **Required.** Fish Audio API key. Free account, no payment needed. Used for TTS (always) and ASR (only when `ASR_BACKEND=fish`). |
+| `FISH_TTS_MODEL` | `s2.1-pro-free` | Fish Audio TTS model. Default is free (zero cost). Use `s2.1-pro` for paid higher-quality output. |
 | `GROQ_API_KEY` | — | Groq API key (free tier). Auto-selected as default translation backend when set. |
 | `GEMINI_API_KEY` | — | Gemini API key (free). Used when `GROQ_API_KEY` is absent. |
 | `GROQ_MODEL` | `llama-3.3-70b-versatile` | Groq model override. |

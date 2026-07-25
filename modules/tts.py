@@ -13,6 +13,10 @@ from .audio_assembly import get_duration as _get_audio_duration, SAFE_RATIO_MIN,
 FISH_TTS_URL = "https://api.fish.audio/v1/tts"
 _RETRY_DELAYS = [2, 5, 10]  # seconds between retries
 
+# Free model — zero cost per call, no balance required.
+# Override with FISH_TTS_MODEL=s2-pro or s2.1-pro for higher quality (paid).
+_DEFAULT_TTS_MODEL = "s2.1-pro-free"
+
 
 def build_voice_reference(audio_path: str) -> tuple[bytes, str]:
     """Return (audio_bytes, "") ready for the Fish Audio TTS references field."""
@@ -36,12 +40,14 @@ def synthesize(
     Retries up to 3 times on transient network errors.
     """
     api_key = os.environ["FISH_AUDIO_API_KEY"]
+    model = os.environ.get("FISH_TTS_MODEL", _DEFAULT_TTS_MODEL)
 
     if reference_id:
         # Library / saved model — JSON body (no binary, so no need for msgpack)
         payload_json = {
             "text": text,
             "reference_id": reference_id,
+            "model": model,
             "format": output_format,
             "latency": latency,
             "streaming": False,
@@ -53,6 +59,7 @@ def synthesize(
         payload = {
             "text": text,
             "references": [{"audio": reference_audio_bytes, "text": reference_text}],
+            "model": model,
             "format": output_format,
             "latency": latency,
             "streaming": False,
